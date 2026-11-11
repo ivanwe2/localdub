@@ -1,0 +1,33 @@
+name: devcontainer
+
+# Builds the dev container exactly as VS Code does and runs the fast tests inside it, but only when
+# something the container depends on changes (Dependabot's feature updates, the Dockerfile, the Rust
+# pin, the Python dependencies). The "tests" workflow can't catch a broken dev container.
+on:
+  pull_request:
+    paths: [".devcontainer/**", "rust-toolchain.toml", "pyproject.toml", ".github/workflows/devcontainer.yml"]
+  push:
+    branches: [main]
+    paths: [".devcontainer/**", "rust-toolchain.toml", "pyproject.toml", ".github/workflows/devcontainer.yml"]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the dev container and run the fast tests inside it
+        uses: devcontainers/ci@v0.3
+        with:
+          push: never
+          runCmd: |
+            set -e
+            cargo --version
+            node --version
+            python -m pytest -q -m "not slow"
