@@ -1,0 +1,4 @@
+# keep LF line endings everywhere (scripts must run on Linux even when committed from Windows)
+* text=auto eol=lf
+*.png binary
+*.jpg binary

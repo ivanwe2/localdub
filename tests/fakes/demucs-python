@@ -1,0 +1,11 @@
+#!/bin/sh
+# Fake Demucs venv python: '-c ...' prints True; '-m demucs ...' writes vocals = input, no_vocals = input at -20 dB.
+if [ "$1" = "-c" ]; then echo True; exit 0; fi
+[ "$1" = "-m" ] && [ "$2" = "demucs" ] || exit 9
+shift 2
+while [ $# -gt 1 ]; do
+  case "$1" in -n) M=$2; shift 2;; -o) O=$2; shift 2;; -d) shift 2;; --two-stems=vocals) shift;; *) echo "bad arg $1" >&2; exit 9;; esac
+done
+IN=$1; S=$(basename "$IN" .wav); mkdir -p "$O/$M/$S"
+ffmpeg -nostdin -loglevel error -y -i "$IN" "$O/$M/$S/vocals.wav"
+ffmpeg -nostdin -loglevel error -y -i "$IN" -af volume=-20dB "$O/$M/$S/no_vocals.wav"

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "localdub"
+dynamic = ["version"]
+description = "Dub videos into another language in the creator's own cloned voice, and cut Shorts, on your own GPUs."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24"]
+
+[project.optional-dependencies]
+# speaker fingerprints for choosing the voice sample and the takes (WavLM x-vectors; needs torch)
+voice = ["transformers>=4.40"]
+dev = ["pytest>=8", "pyflakes>=3"]
+
+[project.scripts]
+localdub = "localdub.run:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "localdub.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["slow: end-to-end runs against the fake servers (a few minutes)"]
