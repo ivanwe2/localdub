@@ -12,13 +12,13 @@
     "ghcr.io/devcontainers/features/node:1": { "version": "lts" }
   },
   "mounts": [
-    "source=localdub-cargo-target,target=/cargo-target,type=volume"
+    "source=localdub-cargo-target,target=/home/dev/.cargo-target,type=volume"
   ],
   "postCreateCommand": "git config --global --add safe.directory ${containerWorkspaceFolder} && pip install -e '.[dev]' && rustup toolchain install",
   "customizations": {
     "vscode": {
       "extensions": ["rust-lang.rust-analyzer", "ms-python.python", "tamasfe.even-better-toml"],
-      "settings": { "python.defaultInterpreterPath": "/opt/venv/bin/python" }
+      "settings": { "python.defaultInterpreterPath": "/home/dev/.venv/bin/python" }
     }
   }
 }

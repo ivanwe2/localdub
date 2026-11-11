@@ -15,14 +15,16 @@ RUN apt-get update \
       ffmpeg hunspell ${HUNSPELL_DICTS} fontconfig fonts-dejavu-core \
  && rm -rf /var/lib/apt/lists/*
 
-# A non-root user with the usual first Linux uid, so files created in the mounted repo aren't root's.
-# /opt/venv holds the engine's Python packages; /cargo-target holds Rust build output in a Docker
-# volume (see devcontainer.json), because building on a folder mounted from Windows is slow.
+# A non-root user, so files created in the mounted repo aren't root's. On Linux hosts the dev container
+# tooling changes this user's uid to match yours and re-owns the HOME folder only, so everything the
+# user must write lives under it: ~/.venv (the engine's Python packages) and ~/.cargo-target (Rust build
+# output, a Docker volume, see devcontainer.json; building on a folder mounted from Windows is slow).
 ARG USERNAME=dev
 RUN useradd --create-home --uid 1000 --shell /bin/bash ${USERNAME} \
  && echo "${USERNAME} ALL=(root) NOPASSWD:ALL" > /etc/sudoers.d/${USERNAME} \
- && python3 -m venv /opt/venv && chown -R ${USERNAME} /opt/venv \
- && mkdir /cargo-target && chown ${USERNAME} /cargo-target
+ && python3 -m venv /home/${USERNAME}/.venv \
+ && mkdir /home/${USERNAME}/.cargo-target \
+ && chown -R ${USERNAME}: /home/${USERNAME}
 
-ENV PATH=/opt/venv/bin:$PATH \
-    CARGO_TARGET_DIR=/cargo-target
+ENV PATH=/home/${USERNAME}/.venv/bin:$PATH \
+    CARGO_TARGET_DIR=/home/${USERNAME}/.cargo-target
