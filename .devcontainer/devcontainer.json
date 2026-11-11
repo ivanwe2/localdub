@@ -1,0 +1,24 @@
+// VS Code: "Dev Containers: Reopen in Container". Everything builds and runs inside; the laptop needs
+// only Docker Desktop and VS Code. The fixed container name lets tools outside VS Code run commands
+// in it too:  docker exec -w /workspaces/localdub localdub-dev python -m pytest -q
+{
+  "name": "localdub",
+  "build": { "dockerfile": "Dockerfile" },
+  "runArgs": ["--name", "localdub-dev"],
+  "remoteUser": "dev",
+  "features": {
+    // the Rust version itself is pinned in rust-toolchain.toml and installed by postCreateCommand
+    "ghcr.io/devcontainers/features/rust:1": { "version": "latest", "profile": "minimal" },
+    "ghcr.io/devcontainers/features/node:1": { "version": "lts" }
+  },
+  "mounts": [
+    "source=localdub-cargo-target,target=/cargo-target,type=volume"
+  ],
+  "postCreateCommand": "git config --global --add safe.directory ${containerWorkspaceFolder} && pip install -e '.[dev]' && rustup toolchain install",
+  "customizations": {
+    "vscode": {
+      "extensions": ["rust-lang.rust-analyzer", "ms-python.python", "tamasfe.even-better-toml"],
+      "settings": { "python.defaultInterpreterPath": "/opt/venv/bin/python" }
+    }
+  }
+}

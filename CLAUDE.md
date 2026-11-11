@@ -50,8 +50,27 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 - Public repo: never commit media, transcripts or voice samples of real people. Tests use the
   generated fixture in `tests/fixture.py` with made-up sentences.
 - Settings: defaults in `settings.py`; `~/dub/settings.json` overrides only what differs.
+- Language-agnostic: nothing may assume Bulgarian → English. Languages, dictionaries and prompts come
+  from the channel profile and settings.
 
-## Architecture (decided Nov 11, 2026)
+## Workflow
+
+- Develop inside the dev container (`.devcontainer/`, VS Code "Reopen in Container"); keep the laptop
+  clean. From outside VS Code: `docker exec -w /workspaces/localdub localdub-dev <command>`.
+- One branch per step (`feat/…`, `fix/…`, `chore/…`, `docs/…`) → pull request → CI green → merge.
+  `main` only takes changes through PRs. Conventional commit messages (`feat:`, `fix:`, `ci:`…).
+- Rust toolchain pinned in `rust-toolchain.toml`; Rust CI runs `cargo fmt --check`, `cargo clippy`
+  (warnings are errors) and `cargo test`.
+
+## Architecture (decided Nov 11–12, 2026)
+
+- **Deployment target**: one CPU-only localdub container (server + UI + engine + ffmpeg + dictionaries,
+  speaker model on CPU) configured with URLs and keys, talking to model services on the GPU box:
+  the llama.cpp router (text, vision, TTS; list/load/unload presets through its API), transcription
+  (`nemo-speech serve`, API to be confirmed, word timestamps needed) and separation (Demucs has no
+  server: a small HTTP wrapper on the GPU box, or CPU in the container). The engine keeps a "local"
+  backend (run the programs directly) for single-machine setups. Plan: dev container → engine
+  backends local|http for transcription and separation → Rust server → app image + docker compose.
 
 - **engine**: this Python package. Python only where the AI libraries need it.
 - **server**: Rust, axum + tokio, in `server/`. REST API over the runs folder, one GPU job at a time
@@ -68,9 +87,12 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 1. Engine `--json` (0.6.0): JSON Lines on stdout (`start`, `stage`, `check`, final `result`), human
    messages on stderr; contract in `src/localdub/events.py` and README. Possible later: per-stage
    progress events (lines voiced, images seen) for progress bars; until then the server can show stderr.
-2. Server, one commit at a time: `/health` → list runs (serde) → job queue running the engine →
-   progress streaming → reviews and Shorts endpoints → token auth → serve the UI.
-3. Web UI on top of the server.
+2. Dev container (branch `chore/devcontainer`), then Dependabot and branch protection on `main`.
+3. Engine: transcription and separation backends, local | http (check `nemo-speech serve --help` first).
+4. Server, one PR at a time: `/health` → list runs (serde) → job queue running the engine →
+   progress streaming → reviews and Shorts endpoints → router model management → token auth → serve the UI.
+5. Web UI on top of the server.
+6. App image (multi-stage) + docker compose; GPU-side services on CT 103.
 
 ## Backlog
 
@@ -83,3 +105,9 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 - Review 1 lists too much on full videos (~12% unknown words); fix one line without approving all
   of review 2; `--fast` mode (translation thinking off).
 - Clipped endings inside a word ("vide") still pass the take check.
+- Language assumptions left in the engine: the spelling prompt's examples are Bulgarian; the take
+  check spells out numbers in English only; voice test sentences (`speaker.CALIBRATION`) are English only.
+- Voice candidates: the test clones aren't checked like real takes (TTS sometimes fluffs words); score
+  differences ≲ 0.01 are noise with 4 sentences × 1 seed (Nov 12: candidates 0.966 / 0.957 / 0.930,
+  Ivan's ref.wav 0.956; ranking matched his ear). The score shortlists, the ear decides close calls.
+- Log noise from the speaker model (torch `key_padding_mask` warning, HF Hub token notice).
