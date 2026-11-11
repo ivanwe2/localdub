@@ -50,8 +50,5 @@ def note(**fields) -> None:
 
 def finish(exit_code: int) -> None:
     """The last event: how the command ended, plus everything noted on the way."""
-    status = switch = {
-        0: "done",
-        3: "waiting",
-    }.get(exit_code, "error")
+    status = {0: "done", 3: "waiting"}.get(exit_code, "error")
     emit("result", status=status, exit_code=exit_code, **_result)
