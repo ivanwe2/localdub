@@ -27,4 +27,5 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]  # tests import the package from src/ without installing it
 markers = ["slow: end-to-end runs against the fake servers (a few minutes)"]

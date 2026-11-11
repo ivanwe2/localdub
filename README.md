@@ -80,6 +80,23 @@ Each Short is 1080x1920: the full frame over a blurred copy of itself, the title
 burned-in captions. `--lang original` cuts from the original audio with captions timed by the real
 word timestamps, in whatever language the channel speaks.
 
+### For scripts, servers and agents: `--json`
+
+Every command takes `--json`. Messages for people stay on stderr; stdout then carries one JSON object
+per line, and the last line is always the result:
+
+```
+{"event": "start", "command": "run", "run": "market", "channel": "mychannel", "dir": "...", "stages": [...], "done": []}
+{"event": "stage", "stage": "separate", "status": "started"}
+{"event": "stage", "stage": "separate", "status": "done", "seconds": 19.3}
+{"event": "result", "status": "waiting", "exit_code": 3, "run": "market",
+ "waiting_for": {"kind": "review1", "file": ".../review-1-transcript.txt"}}
+```
+
+`status` is `done`, `waiting` (`waiting_for.kind`: `review1`, `review2` or `shorts`) or `error` (with
+`error` and, if a stage failed, `stage`). A finished run's result has `outputs`, `shorts` and `timings`;
+`check --json` sends one `check` event per line it checks. See `src/localdub/events.py`.
+
 ## Requirements
 
 Built and run on a Proxmox LXC with 2× RTX 5060 Ti 16 GB; a 30-minute video takes about 30 minutes.

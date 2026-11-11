@@ -65,8 +65,9 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 
 ## Next steps
 
-1. Engine: `--json` summary on stdout (status, outputs, waiting file, timings) and progress events,
-   the contract for the server and for agents. Small Python step; ask Ivan whether he wants to write it.
+1. Engine `--json` (0.6.0): JSON Lines on stdout (`start`, `stage`, `check`, final `result`), human
+   messages on stderr; contract in `src/localdub/events.py` and README. Possible later: per-stage
+   progress events (lines voiced, images seen) for progress bars; until then the server can show stderr.
 2. Server, one commit at a time: `/health` → list runs (serde) → job queue running the engine →
    progress streaming → reviews and Shorts endpoints → token auth → serve the UI.
 3. Web UI on top of the server.

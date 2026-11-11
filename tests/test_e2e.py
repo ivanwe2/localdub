@@ -15,9 +15,22 @@ def streams(path):
     return out
 
 
-def test_automatic_run_with_shorts(fake_env):
-    rc = main(["run", str(fake_env["video"]), "--channel", "auto", "--name", "auto", "--no-review", "--shorts", "1"])
+def events_of(capsys):
+    """The --json events printed since the last call (stdout carries nothing else)."""
+    return [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+
+
+def test_automatic_run_with_shorts(fake_env, capsys):
+    rc = main(["run", str(fake_env["video"]), "--channel", "auto", "--name", "auto", "--no-review", "--shorts", "1",
+               "--json"])
     assert rc == 0
+    ev = events_of(capsys)
+    assert ev[0]["event"] == "start" and ev[0]["command"] == "run" and ev[0]["done"] == []
+    done = [e["stage"] for e in ev if e["event"] == "stage" and e["status"] == "done"]
+    assert done == ev[0]["stages"]  # every announced stage finished, in order
+    result = ev[-1]
+    assert result["event"] == "result" and result["status"] == "done" and result["exit_code"] == 0
+    assert result["outputs"]["video"].endswith("auto.en.mp4") and set(result["shorts"]) == {"original", "dub"}
     run = fake_env["home"] / "runs" / "auto"
     assert streams(run / "auto.en.mp4") == ["video", "audio", "audio"]
     assert (run / "auto.en.srt").read_text(encoding="utf-8").startswith("1\n")
@@ -27,9 +40,12 @@ def test_automatic_run_with_shorts(fake_env):
     assert profile["voice_ref"] == "voice.wav" and profile["corrections"] == {}  # --no-review learns nothing
 
 
-def test_reviewed_run_teaches_the_channel(fake_env):
+def test_reviewed_run_teaches_the_channel(fake_env, capsys):
     video = str(fake_env["video"])
-    assert main(["run", video, "--channel", "taught", "--name", "taught"]) == 3
+    assert main(["run", video, "--channel", "taught", "--name", "taught", "--json"]) == 3
+    result = events_of(capsys)[-1]
+    assert result["status"] == "waiting" and result["exit_code"] == 3
+    assert result["waiting_for"]["kind"] == "review1" and result["waiting_for"]["file"].endswith("review-1-transcript.txt")
     run = fake_env["home"] / "runs" / "taught"
     r1 = run / "review-1-transcript.txt"
     text = r1.read_text(encoding="utf-8").replace("status: pending", "status: approved", 1)

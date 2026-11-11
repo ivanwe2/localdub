@@ -22,7 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import media, review
+from . import events, media, review
 from .llm import LLMError, Server
 from .mix import mix, mux, place, subtitles
 from .settings import Profile, home, load_settings
@@ -36,6 +36,13 @@ LANG3 = {"bg": "bul", "en": "eng", "de": "deu", "es": "spa", "fr": "fra", "it": 
 
 def log(msg: str = "") -> None:
     print(msg, file=sys.stderr, flush=True)
+
+
+def fail(msg: str, **fields) -> int:
+    """Report an error to people (stderr) and to the result event; returns exit code 1."""
+    log(f"error: {msg}")
+    events.note(error=msg, **fields)
+    return 1
 
 
 def read_json(path: Path):
@@ -77,7 +84,8 @@ class Ctx:
         self.no_review, self.rerun = no_review, rerun
 
 
-def waiting(ctx: Ctx, title: str, path: Path, extra: str = "") -> str:
+def waiting(ctx: Ctx, kind: str, title: str, path: Path, extra: str = "") -> str:
+    events.note(waiting_for={"kind": kind, "file": str(path)})
     log(f"\n== {title}")
     log(f"   {path}")
     if extra:
@@ -359,10 +367,10 @@ def stage_review1(run: Run, ctx: Ctx):
             log("   nothing doubtful in the transcript: no review needed")
             return None
         what = f"{count} lines to check" + (", and the voice sample to listen to" if voice else "")
-        return waiting(ctx, "Review 1 of 2 is ready (the transcript)", path, what + ".")
+        return waiting(ctx, "review1", "Review 1 of 2 is ready (the transcript)", path, what + ".")
     parsed = review.parse(path)
     if parsed["status"] != "approved":
-        return waiting(ctx, "Review 1 of 2 is still waiting for you", path)
+        return waiting(ctx, "review1", "Review 1 of 2 is still waiting for you", path)
     n = learn_transcript(parsed, segs, report, profile)
     if parsed["voice"] is not None or not has_voice:
         log(f"   voice sample: {set_voice(run, profile, parsed['voice'] or 'auto')}")
@@ -406,12 +414,12 @@ def stage_review2(run: Run, ctx: Ctx):
             log("   review skipped (--no-review); nothing is learned from this run")
             return None
         over = sum(1 for s in segs if len(s["en"]) > s["budget"])
-        return waiting(ctx, "Review 2 of 2 is ready (the translation)", path,
+        return waiting(ctx, "review2", "Review 2 of 2 is ready (the translation)", path,
                        f"{len(segs)} lines, {over} marked OVER (they will be sped up, up to "
                        f"{round((ctx.settings['max_speedup'] - 1) * 100)}%). An empty EN line is left silent.")
     parsed = review.parse(path)
     if parsed["status"] != "approved":
-        return waiting(ctx, "Review 2 of 2 is still waiting for you", path)
+        return waiting(ctx, "review2", "Review 2 of 2 is still waiting for you", path)
     for s in segs:
         if s["id"] in parsed["en"]:
             s["en"] = parsed["en"][s["id"]]
@@ -539,6 +547,7 @@ STAGES = [
     ("mix", "mix over the music, write the video and subtitles", stage_mix),
 ]
 NAMES = [s[0] for s in STAGES]
+SHORTS_LANGS = ("original", "dub")  # run --shorts N makes both, in this order
 STAGE_FILES = {  # removed when a stage is redone
     "review1": ["review-1-transcript.txt", "voice-sample.wav", "voice-candidates", "voice-candidates.json"],
     "translate": ["translate-partial.json"],
@@ -562,26 +571,23 @@ def cmd_run(args) -> int:
         run = Run(args.video)  # continue by run name
     else:
         if not target.exists():
-            log(f"error: {target} not found (and no run called '{args.video}' in {home() / 'runs'})")
-            return 1
+            return fail(f"{target} not found (and no run called '{args.video}' in {home() / 'runs'})")
         start = media.parse_mmss(args.start) if args.start else None
         length = media.parse_mmss(args.duration) if args.duration else None
         run = Run(args.name or default_name(target.resolve(), start, length))
         if not run.state:
             if not args.channel:
-                log("error: a new run needs --channel NAME (the channel whose profile it uses and teaches)")
-                return 1
+                return fail("a new run needs --channel NAME (the channel whose profile it uses and teaches)")
             run.state = {"source": str(target.resolve()), "channel": args.channel, "start": start, "length": length,
                          "created": dt.datetime.now().isoformat(timespec="seconds"), "done": [], "timings": {}}
             run.save()
     st = run.state
+    events.note(run=run.name, channel=st["channel"], dir=str(run.dir))
     if args.channel and args.channel != st["channel"]:
-        log(f"error: run '{run.name}' belongs to channel '{st['channel']}'; use --name for a separate run")
-        return 1
+        return fail(f"run '{run.name}' belongs to channel '{st['channel']}'; use --name for a separate run")
     if args.redo:
         if args.redo not in NAMES:
-            log(f"error: --redo takes one of: {', '.join(NAMES)}")
-            return 1
+            return fail(f"--redo takes one of: {', '.join(NAMES)}")
         for name in NAMES[NAMES.index(args.redo):]:
             if name in st["done"]:
                 st["done"].remove(name)
@@ -592,35 +598,44 @@ def cmd_run(args) -> int:
     profile = Profile(st["channel"])
     ctx = Ctx(settings, profile, Server(settings), args.no_review, f"localdub run {run.name}")
     log(f"localdub: run '{run.name}' (channel '{st['channel']}') in {run.dir}")
+    events.emit("start", command="run", run=run.name, channel=st["channel"], dir=str(run.dir),
+                stages=NAMES + ([f"shorts-{lang}" for lang in SHORTS_LANGS] if args.shorts else []),
+                done=list(st["done"]))
     for name, what, fn in STAGES:
         if name in st["done"]:
             continue
         log(f"\n== {name}: {what}")
+        events.emit("stage", stage=name, status="started")
         t0 = time.monotonic()
         try:
             result = fn(run, ctx)
         except (media.ToolError, LLMError, RuntimeError, OSError) as e:
             run.save()
-            log(f"\nerror in stage '{name}': {e}")
             log(f"Fix the cause, then continue with: {ctx.rerun}")
-            return 1
+            return fail(f"in stage '{name}': {e}", stage=name)
         if result == WAIT:
             run.save()
+            events.emit("stage", stage=name, status="waiting")
             return 3
         took = round(time.monotonic() - t0, 1)
         st["done"].append(name)
         st["timings"][name] = took
         run.save()
+        events.emit("stage", stage=name, status="done", seconds=took)
         log(f"   ({took:.0f}s)")
     if args.shorts:
-        for lang in ("original", "dub"):
+        for lang in SHORTS_LANGS:
+            stage = f"shorts-{lang}"
+            events.emit("stage", stage=stage, status="started")
             t0 = time.monotonic()
             rc = make_shorts(run, settings, lang, auto=args.shorts)
             if rc != 0:
                 return rc
-            st["timings"][f"shorts-{lang}"] = round(time.monotonic() - t0, 1)
+            st["timings"][stage] = round(time.monotonic() - t0, 1)
             run.save()
+            events.emit("stage", stage=stage, status="done", seconds=st["timings"][stage])
     out = st["outputs"]
+    events.note(outputs=out, shorts=st.get("shorts", {}), timings=st["timings"])
     machine = sum(v for k, v in st["timings"].items() if not k.startswith("review"))
     log("\n== done")
     log(f"   video:      {out['video']}")
@@ -640,6 +655,7 @@ def cmd_check(args) -> int:
     def line(good: bool, what: str, hint: str = ""):
         nonlocal ok
         ok &= good
+        events.emit("check", what=what, ok=good, hint=hint)
         log(f"  {'ok  ' if good else 'FAIL'}  {what}" + ("" if good or not hint else f"   -> {hint}"))
 
     cfg = home() / "settings.json"
@@ -691,6 +707,8 @@ def cmd_check(args) -> int:
     except LLMError as e:
         line(False, f"llama server at {settings['llm_url']}", str(e))
     log("all good" if ok else "fix the FAIL lines above")
+    if not ok:
+        events.note(error="some checks failed")
     return 0 if ok else 1
 
 
@@ -729,17 +747,16 @@ def make_shorts(run: Run, settings: dict, lang: str, auto: int = 0, redo: str | 
             vision = sh.look(sheets, vision_json, server, settings["vision_model"])
             cands = sh.select(segs, vision, mot, server, settings, lang, language)
         except (media.ToolError, LLMError, RuntimeError, OSError) as e:
-            log(f"\nerror: {e}")
             log(f"Fix the cause, then run again (finished steps are kept): {rerun}")
-            return 1
+            return fail(str(e), stage=f"shorts-{lang}")
         if not cands:
-            log(f"error: no usable candidates came back; try again with: {rerun} --redo select")
-            return 1
+            return fail(f"no usable candidates came back; try again with: {rerun} --redo select", stage=f"shorts-{lang}")
         write_json(cand_json, cands)
         sh.write_candidates(cand_txt, rerun, cands, segs, lang, auto=min(auto, len(cands)))
         log(f"   {len(cands)} candidates, strongest first: {cand_txt}")
     status, picked = sh.read_candidates(cand_txt)
     if status != "approved" or not picked:
+        events.note(waiting_for={"kind": "shorts", "lang": lang, "file": str(cand_txt)})
         log(f"\n== Pick your {language} Shorts\n   {cand_txt}")
         log("   Mark the ones to render with [x], set 'status: approved', save, then run:")
         log(f"   {rerun}")
@@ -753,8 +770,7 @@ def make_shorts(run: Run, settings: dict, lang: str, auto: int = 0, redo: str | 
         try:
             sh.render(video, segs, pick, out, out_dir, settings["shorts"]["title"], lang)
         except (media.ToolError, RuntimeError) as e:
-            log(f"error: {e}")
-            return 1
+            return fail(str(e), stage=f"shorts-{lang}")
         made.append(str(out))
         log(f"   {out.name}: {media.duration(out):.0f}s, rendered in {time.monotonic() - t0:.0f}s")
     run.state.setdefault("shorts", {})[lang] = made
@@ -764,11 +780,14 @@ def make_shorts(run: Run, settings: dict, lang: str, auto: int = 0, redo: str | 
 
 def cmd_shorts(args) -> int:
     run = Run(args.name)
+    events.note(run=run.name, dir=str(run.dir))
     if not run.state or "mix" not in run.state.get("done", []):
-        log(f"error: run '{args.name}' isn't finished yet (localdub run {args.name})")
-        return 1
+        return fail(f"run '{args.name}' isn't finished yet (localdub run {args.name})")
+    events.emit("start", command="shorts", run=run.name, channel=run.state["channel"], dir=str(run.dir),
+                lang=args.lang)
     rc = make_shorts(run, load_settings(), args.lang, args.auto, args.redo)
     if rc == 0:
+        events.note(shorts={args.lang: run.state["shorts"][args.lang]})
         log("\n== done")
         for f in run.state["shorts"][args.lang]:
             log(f"   {f}")
@@ -780,7 +799,10 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="localdub", description="Dub a video into another language in the creator's own voice.")
     ap.add_argument("--version", action="version", version=f"localdub {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    r = sub.add_parser("run", help="start or continue a run")
+    common = argparse.ArgumentParser(add_help=False)  # options every command takes
+    common.add_argument("--json", action="store_true",
+                        help="also print machine-readable events on stdout, one JSON object per line (see events.py)")
+    r = sub.add_parser("run", parents=[common], help="start or continue a run")
     r.add_argument("video", help="the video file, or the name of a run to continue")
     r.add_argument("--channel", help="channel profile to use and teach (needed for a new run)")
     r.add_argument("--start", help="only dub an excerpt starting here (mm:ss or seconds)")
@@ -790,12 +812,20 @@ def main(argv=None) -> int:
     r.add_argument("--redo", metavar="STAGE", help=f"redo from this stage on: {', '.join(NAMES)}")
     r.add_argument("--shorts", type=int, default=0, metavar="N",
                    help="when the video is done, also make the top N Shorts in both languages, without stopping")
-    s = sub.add_parser("shorts", help="propose Shorts from a finished run, then render the ones you pick")
+    s = sub.add_parser("shorts", parents=[common], help="propose Shorts from a finished run, then render the ones you pick")
     s.add_argument("name", help="the run's name")
     s.add_argument("--lang", choices=["dub", "original"], default="dub",
                    help="dub: the dubbed video (default); original: the creator's own audio and language")
     s.add_argument("--auto", type=int, default=0, metavar="N", help="render the top N candidates without stopping")
     s.add_argument("--redo", choices=["vision", "select"], help="look at the video again / propose new candidates")
-    sub.add_parser("check", help="check that the tools, models and server are in place")
+    sub.add_parser("check", parents=[common], help="check that the tools, models and server are in place")
     args = ap.parse_args(argv)
-    return {"run": cmd_run, "shorts": cmd_shorts, "check": cmd_check}[args.cmd](args)
+    events.configure(args.json)
+    try:
+        rc = {"run": cmd_run, "shorts": cmd_shorts, "check": cmd_check}[args.cmd](args)
+    except Exception as e:  # a bug, not a handled error: still end the event stream with a result
+        events.note(error=f"{type(e).__name__}: {e}")
+        events.finish(1)
+        raise
+    events.finish(rc)
+    return rc
