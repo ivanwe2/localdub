@@ -1,0 +1,6 @@
+# The Rust version for this repo, wherever cargo runs (dev container, CI, your laptop): rustup reads
+# this file and installs exactly this toolchain, so everyone builds with the same compiler.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
