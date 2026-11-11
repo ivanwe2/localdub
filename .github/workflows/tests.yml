@@ -2,7 +2,17 @@ name: tests
 
 on:
   push:
+    branches: [main]      # pushes to other branches are tested through their pull request
   pull_request:
+
+# A newer push to the same pull request cancels the run that is still going on the old one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Least privilege: the jobs only need to read the code.
+permissions:
+  contents: read
 
 jobs:
   engine:

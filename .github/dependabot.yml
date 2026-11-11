@@ -1,0 +1,19 @@
+# Dependabot opens a pull request when something this repo depends on has a new version; CI then
+# shows whether the update breaks anything. Add a "cargo" entry (directory: /server) once the server exists.
+version: 2
+updates:
+  - package-ecosystem: github-actions   # actions used in .github/workflows
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]                 # one PR for all action updates
+  - package-ecosystem: pip              # Python dependencies in pyproject.toml
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: devcontainers    # feature versions in .devcontainer/devcontainer.json
+    directory: /
+    schedule:
+      interval: weekly
