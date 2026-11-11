@@ -9,7 +9,7 @@
   "features": {
     // the Rust version itself is pinned in rust-toolchain.toml and installed by postCreateCommand
     "ghcr.io/devcontainers/features/rust:1": { "version": "latest", "profile": "minimal" },
-    "ghcr.io/devcontainers/features/node:1": { "version": "lts" }
+    "ghcr.io/devcontainers/features/node:2": { "version": "lts" }
   },
   "mounts": [
     "source=localdub-cargo-target,target=/cargo-target,type=volume"
