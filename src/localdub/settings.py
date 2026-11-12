@@ -19,7 +19,7 @@ def home() -> Path:
     return Path(os.environ.get("LOCALDUB_HOME", Path.home() / "dub"))
 
 DEFAULT_SETTINGS = {
-    "llm_url": "http://127.0.0.1:9876",
+    "llm_url": "http://127.0.0.1:9876",  # the model server: llama-swap (deploy/gpu/llama-swap.yaml)
     "api_key_env": "LLAMA_API_KEY",
     "api_key_file": "/etc/llama.env",
     "text_model": "gemma4-31b",
@@ -33,7 +33,12 @@ DEFAULT_SETTINGS = {
     "max_speedup": 1.15,
     "seeds": [42, 7, 1234],
     "lufs": -14.0,
+    "asr_model": "nemotron",        # transcription and the take check, on the model server
+    "separation_model": "demucs",   # voice / music separation, on the model server
+    # backend "http": the tool runs behind the model server (the model names above);
+    # "local": localdub runs it on this machine (the paths and devices below) and frees the GPUs first
     "nemo": {
+        "backend": "http",
         "bin": str(Path.home() / ".local/bin/nemo-speech"),
         "model": "/root/models/nemotron/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-AD-Q2_0_M.gguf",
         "config": "/root/models/nemotron/salm-16gb.yaml",
@@ -42,6 +47,7 @@ DEFAULT_SETTINGS = {
         "max_chunk_minutes": 25,
     },
     "demucs": {
+        "backend": "http",
         "python": "/root/venvs/demucs-gpu/bin/python",
         "model": "htdemucs_ft",
         "device": "cuda:0",

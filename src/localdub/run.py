@@ -116,7 +116,20 @@ def stage_prep(run: Run, ctx: Ctx):
     log(f"   {media.mmss(run.state['seconds'])} of audio")
 
 
+def local(ctx: Ctx, tool: str) -> bool:
+    """Does this tool ("nemo", "demucs") run on this machine instead of behind the model server?"""
+    backend = ctx.settings[tool]["backend"]
+    if backend not in ("http", "local"):
+        raise RuntimeError(f"{tool}.backend is {backend!r}; use \"http\" or \"local\"")
+    return backend == "local"
+
+
 def stage_separate(run: Run, ctx: Ctx):
+    if not local(ctx, "demucs"):
+        log(f"   {ctx.settings['separation_model']} on the model server (roughly 1 minute per 10 minutes of video)")
+        ctx.server.separate(ctx.settings["separation_model"], run.p("audio44.wav"), run.p("vocals.wav"),
+                            run.p("music.wav"))
+        return
     ctx.server.unload_all()
     d = ctx.settings["demucs"]
     out = run.p("stems")
@@ -132,7 +145,8 @@ def stage_separate(run: Run, ctx: Ctx):
 
 def stage_transcribe(run: Run, ctx: Ctx):
     from .asr import transcribe_folder
-    ctx.server.unload_all()
+    if local(ctx, "nemo"):
+        ctx.server.unload_all()
     nemo = ctx.settings["nemo"]
     total = run.state["seconds"]
     limit = nemo["max_chunk_minutes"] * 60
@@ -150,8 +164,10 @@ def stage_transcribe(run: Run, ctx: Ctx):
     for k, (a, b) in enumerate(zip(cuts, cuts[1:])):
         media.ffmpeg("-ss", f"{a:.3f}", "-i", run.p("audio16.wav"), "-t", f"{b - a:.3f}",
                      "-c:a", "pcm_s16le", work / "in" / f"part{k:02d}.wav")
-    log(f"   Nemotron on {nemo['device']}, {len(cuts) - 1} part(s)")
-    got = transcribe_folder(nemo, work / "in", work / "out", ctx.profile["source_lang"], nemo["device"])
+    where = nemo["device"] if local(ctx, "nemo") else "the model server"
+    log(f"   Nemotron on {where}, {len(cuts) - 1} part(s)")
+    got = transcribe_folder(ctx.settings, ctx.server, work / "in", work / "out", ctx.profile["source_lang"],
+                            nemo["device"])
     words = []
     for k, offset in enumerate(cuts[:-1]):
         data = got.get(f"part{k:02d}")
@@ -443,9 +459,12 @@ def stage_voice(run: Run, ctx: Ctx):
     for s in segs:  # a redo starts from the translated text, not from an earlier automatic shortening
         if s.get("shortened_from"):
             s["en"] = s.pop("shortened_from")
-    ctx.server.unload_all(keep=ctx.settings["tts_model"])  # the TTS model sits on GPU 0, the check on GPU 1
-    log(f"   {ctx.settings['tts_model']} on GPU 0, checking each take with Nemotron on "
-        f"{ctx.settings['nemo']['check_device']}")
+    if local(ctx, "nemo"):  # the voice clone stays on the server (GPU 0), the check runs here (GPU 1)
+        ctx.server.unload_all(keep=ctx.settings["tts_model"])
+        log(f"   {ctx.settings['tts_model']} on the model server, checking each take with Nemotron on "
+            f"{ctx.settings['nemo']['check_device']}")
+    else:  # llama-swap runs both side by side (its "voicing" group)
+        log(f"   {ctx.settings['tts_model']}, checking each take with {ctx.settings['asr_model']} (both on the model server)")
     lang = ctx.profile["target_lang"]
     embedder = vp = None
     if ctx.settings.get("takes_per_line", 1) > 1:
@@ -468,7 +487,8 @@ def stage_voice(run: Run, ctx: Ctx):
             s["shortened_from"] = before[s["id"]]
         if changed:
             log(f"   re-voicing {len(changed)} shortened lines")
-            ctx.server.unload_all(keep=ctx.settings["tts_model"])
+            if local(ctx, "nemo"):  # shortening loaded the text model again
+                ctx.server.unload_all(keep=ctx.settings["tts_model"])
             redo = {s["id"] for s in changed}
             report = sorted([r for r in report if r["id"] not in redo] +
                             voice_all(changed, run.dir, ctx.server, ctx.settings, ctx.profile, lang, embedder, vp),
@@ -667,17 +687,25 @@ def cmd_check(args) -> int:
         line(True, "hunspell bg_BG dictionary")
     except Exception as e:  # noqa: BLE001
         line(False, "hunspell bg_BG dictionary", f"apt-get install hunspell-bg ({e})")
-    nemo = settings["nemo"]
+    nemo, d = settings["nemo"], settings["demucs"]
+    for tool, backend in (("nemo", nemo["backend"]), ("demucs", d["backend"])):
+        line(backend in ("http", "local"), f"{tool}.backend: {backend}", 'use "http" (the model server) or "local"')
+    remote = [settings["text_model"], settings["vision_model"], settings["tts_model"]]
     fix = "set the right path in ~/dub/settings.json (see README, Settings)"
-    line(Path(nemo["bin"]).exists() or shutil.which(nemo["bin"]) is not None, f"nemo-speech: {nemo['bin']}", fix)
-    line(Path(nemo["model"]).exists(), f"Nemotron model: {nemo['model']}", fix)
-    line(Path(nemo["config"]).exists(), f"Nemotron config: {nemo['config']}", fix)
-    d = settings["demucs"]
-    try:
-        out = media.run(d["python"], "-c", "import demucs, torch; print(torch.cuda.is_available())").strip()
-        line(out == "True", f"Demucs + CUDA torch in {d['python']}", "torch can't see the GPU")
-    except (media.ToolError, OSError) as e:
-        line(False, f"Demucs in {d['python']}", str(e).splitlines()[0])
+    if nemo["backend"] == "local":
+        line(Path(nemo["bin"]).exists() or shutil.which(nemo["bin"]) is not None, f"nemo-speech: {nemo['bin']}", fix)
+        line(Path(nemo["model"]).exists(), f"Nemotron model: {nemo['model']}", fix)
+        line(Path(nemo["config"]).exists(), f"Nemotron config: {nemo['config']}", fix)
+    else:
+        remote.append(settings["asr_model"])
+    if d["backend"] == "local":
+        try:
+            out = media.run(d["python"], "-c", "import demucs, torch; print(torch.cuda.is_available())").strip()
+            line(out == "True", f"Demucs + CUDA torch in {d['python']}", "torch can't see the GPU")
+        except (media.ToolError, OSError) as e:
+            line(False, f"Demucs in {d['python']}", str(e).splitlines()[0])
+    else:
+        remote.append(settings["separation_model"])
     from .llm import api_key
     line(bool(api_key(settings)), f"API key (${settings['api_key_env']} or {settings['api_key_file']})",
          "set it in the environment or in that file")
@@ -701,11 +729,11 @@ def cmd_check(args) -> int:
             line(False, "speaker fingerprints", str(e)[:200])
     try:
         models = Server(settings).models()
-        line(True, f"llama server at {settings['llm_url']}")
-        for m in (settings["text_model"], settings["tts_model"], settings["vision_model"]):
-            line(m in models, f"preset {m}", "add it to ~/llama/models.ini (see README)")
+        line(True, f"model server (llama-swap) at {settings['llm_url']}")
+        for m in remote:
+            line(m in models, f"model {m}", "add it to the llama-swap config (see deploy/gpu/llama-swap.yaml)")
     except LLMError as e:
-        line(False, f"llama server at {settings['llm_url']}", str(e))
+        line(False, f"model server (llama-swap) at {settings['llm_url']}", str(e))
     log("all good" if ok else "fix the FAIL lines above")
     if not ok:
         events.note(error="some checks failed")

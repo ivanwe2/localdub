@@ -1,4 +1,11 @@
-"""Fake llama-server router for the tests: /models, /models/unload, /v1/chat/completions, /tts.
+"""Fake llama-swap for the tests: the routes localdub uses, with the models answering deterministically.
+
+  GET  /v1/models, /running            POST /api/models/unload[/<model>]
+  POST /v1/chat/completions            text and vision
+  POST /upstream/qwen3-tts/tts         voice clone
+  POST /v1/audio/transcriptions        Nemotron (multipart upload; what it hears is in fake_asr.py)
+  POST /upstream/demucs/<path>         forwarded to the real deploy/gpu/demucs_server.py (argv[4]),
+                                       which runs the fake Demucs
 
 Deterministic behaviour the tests rely on:
 - spelling: a few typical spelling-by-ear errors get fixed; one "fix" changes a valid word (the guard must refuse it);
@@ -6,31 +13,59 @@ Deterministic behaviour the tests rely on:
 - translation: lines with id % 3 == 0 come back over their character budget
 - TTS: the clip lasts len(text) / rate seconds; the rate depends on the seed
 - files in the state dir switch on failures: FAIL_TRANSLATE, SHORTEN_ALWAYS_FAIL, BAD_VISION
-State dir = argv[2]: requests.log (every chat request), tts.log (every text voiced).
+argv: port, state dir, the fixture's words.json, the Demucs wrapper's URL.
+State dir: requests.log (every chat request), tts.log (every text voiced), asr-http.log (every file transcribed).
 """
+import base64
+import hashlib
 import io
 import json
 import math
 import re
 import struct
 import sys
+import urllib.request
 import wave
+from email.parser import BytesParser
+from email.policy import HTTP
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from fake_asr import part, take, wav_seconds
+
 STATE = Path(sys.argv[2])
 STATE.mkdir(parents=True, exist_ok=True)
+WORDS = json.loads(Path(sys.argv[3]).read_text(encoding="utf-8"))
+DEMUCS = sys.argv[4]
 KEY = "Bearer test-key"
-models = {"gemma4-31b": "unloaded", "gemma4-31b-vision": "unloaded", "qwen3-tts": "unloaded", "other": "loaded"}
+MODELS = ["gemma4-31b", "gemma4-31b-vision", "qwen3-tts", "nemotron", "demucs", "other"]
+VOICING = {"qwen3-tts", "nemotron"}  # the group that runs side by side; everything else swaps
+running = {"other"}
+voiced = {}  # take hash -> the text voiced, recorded by /tts so a transcribed take can be "heard" back
+part_offset = [0.0]  # where the next partNN.wav starts in the video (parts arrive in order)
 SPELL = {"найемите": "наемите", "ефтината": "евтината", "ефтини": "евтини", "фсички": "всички", "Кирчу": "Кирчо",
          "сирене": "сиренето"}  # the last one changes a valid word: refused by the guard
 FILL = "we went to the market to see what the prices are like this week and what we can buy".split()
 
 
 def load(model):
-    for k in models:
-        models[k] = "unloaded"
-    models[model] = "loaded"
+    global running
+    assert model in MODELS, model
+    running = ({m for m in running if m in VOICING} if model in VOICING else set()) | {model}
+
+
+def form(content_type: str, body: bytes) -> tuple[dict, dict]:
+    """A multipart/form-data body -> ({field: text}, {field: (filename, bytes)})."""
+    msg = BytesParser(policy=HTTP).parsebytes(f"Content-Type: {content_type}\r\n\r\n".encode() + body)
+    assert msg.is_multipart(), "not a multipart body"
+    fields, files = {}, {}
+    for p in msg.iter_parts():
+        name = p.get_param("name", header="content-disposition")
+        if p.get_filename():
+            files[name] = (p.get_filename(), p.get_payload(decode=True))
+        else:
+            fields[name] = p.get_payload(decode=True).decode()
+    return fields, files
 
 
 def english(i, budget, over):
@@ -66,17 +101,31 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.authorized():
             return
-        self.send({"data": [{"id": k, "status": {"value": v}} for k, v in models.items()]})
+        if self.path == "/v1/models":
+            return self.send({"object": "list", "data": [{"id": m, "object": "model"} for m in MODELS]})
+        if self.path == "/running":
+            return self.send({"running": [{"model": m, "state": "ready"} for m in sorted(running)]})
+        self.send({"error": f"no route {self.path}"}, code=404)
 
     def do_POST(self):
         if not self.authorized():
             return
-        b = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        if self.path == "/models/unload":
-            models[b["model"]] = "unloaded"
-            return self.send({"success": True})
-        if self.path == "/tts":
-            return self.tts(b)
+        raw = self.rfile.read(int(self.headers["Content-Length"]))
+        if self.path == "/api/models/unload":
+            running.clear()
+            return self.send(b"OK", "text/plain")
+        if self.path.startswith("/api/models/unload/"):
+            running.discard(self.path.rsplit("/", 1)[1])
+            return self.send(b"OK", "text/plain")
+        if self.path == "/upstream/qwen3-tts/tts":
+            return self.tts(json.loads(raw))
+        if self.path.startswith("/upstream/demucs/"):
+            return self.demucs(raw)
+        if self.path == "/v1/audio/transcriptions":
+            return self.transcribe(*form(self.headers["Content-Type"], raw))
+        if self.path != "/v1/chat/completions":
+            return self.send({"error": f"no route {self.path}"}, code=404)
+        b = json.loads(raw)
         load(b["model"])
         system, user = b["messages"][0]["content"], b["messages"][1]["content"]
         with open(STATE / "requests.log", "a", encoding="utf-8") as f:
@@ -124,10 +173,12 @@ class Handler(BaseHTTPRequestHandler):
         raise AssertionError(system)
 
     def tts(self, b):
-        load(b["model"])
+        load("qwen3-tts")
         assert b["lang"] and len(b["speaker_ref_b64"]) > 1000
         with open(STATE / "tts.log", "a", encoding="utf-8") as f:
             f.write(json.dumps(b["input"], ensure_ascii=False) + "\n")
+        ref = hashlib.md5(base64.b64decode(b["speaker_ref_b64"])).hexdigest()  # as voice.take_name does
+        voiced[hashlib.md5((ref + b["input"]).encode()).hexdigest()[:8]] = b["input"]
         rate = {42: 11.0, 7: 16.0, 1234: 13.0}.get(b["seed"], 14.0)
         n = int(len(b["input"]) / rate * 24000)
         buf = io.BytesIO()
@@ -139,6 +190,31 @@ class Handler(BaseHTTPRequestHandler):
             w.writeframes(pad + b"".join(struct.pack("<h", int(8000 * math.sin(2 * math.pi * (150 + b["seed"] % 50) * i / 24000)))
                                          for i in range(n)) + pad)
         return self.send(buf.getvalue(), "audio/wav")
+
+    def transcribe(self, fields, files):
+        assert fields["model"] == "nemotron" and fields["response_format"] == "verbose_json"
+        assert fields["timestamp_granularities[]"] == "word" and fields["language"]
+        load("nemotron")
+        filename, audio = files["file"]
+        stem, seconds = filename.rsplit(".", 1)[0], wav_seconds(io.BytesIO(audio))
+        with open(STATE / "asr-http.log", "a", encoding="utf-8") as f:
+            f.write(filename + "\n")
+        if stem.startswith("part"):
+            if stem == "part00":
+                part_offset[0] = 0.0
+            got = part(WORDS, part_offset[0], seconds)
+            part_offset[0] += seconds
+        else:
+            got = take(stem, voiced[stem.split("-")[1]], seconds)
+        return self.send({"task": "transcribe", "language": fields["language"], "duration": seconds, **got})
+
+    def demucs(self, raw):
+        load("demucs")
+        rest = self.path[len("/upstream/demucs"):]
+        req = urllib.request.Request(DEMUCS + rest, data=raw, method="POST",
+                                     headers={"Content-Type": self.headers.get("Content-Type", "audio/wav")})
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return self.send(r.read(), r.headers["Content-Type"])
 
     def vision(self, b, user):
         assert user[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")

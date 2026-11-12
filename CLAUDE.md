@@ -29,14 +29,14 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 | Path | What |
 |---|---|
 | `src/localdub/run.py` | CLI, the stages, reviews and learning, `check`, `shorts` command |
-| `src/localdub/llm.py` | llama.cpp router client: chat (JSON repair, retries), `/tts`, unload |
+| `src/localdub/llm.py` | llama-swap client: chat (JSON repair, retries), TTS, transcription, separation, unload |
 | `src/localdub/text.py` | sentences, spelling guard, translation, shortening |
 | `src/localdub/voice.py` | voice-sample candidates, takes, the take check (`judge`), fitting |
 | `src/localdub/speaker.py` | speaker fingerprints (WavLM x-vectors), voiceprint, similarity |
 | `src/localdub/mix.py` | placement (late starts), mixing, muxing, subtitles |
 | `src/localdub/shorts.py` | motion, vision, candidates, captions, rendering |
-| `src/localdub/review.py`, `media.py`, `asr.py`, `settings.py` | review files, ffmpeg, nemo-speech, defaults + channel profiles |
-| `tests/` | unit tests; `test_e2e.py` runs whole videos against `tests/fakes/` |
+| `src/localdub/review.py`, `media.py`, `asr.py`, `settings.py` | review files, ffmpeg, Nemotron (http or local backend), defaults + channel profiles |
+| `tests/` | unit tests; `test_e2e.py` runs whole videos against `tests/fakes/` (fake llama-swap + the real Demucs wrapper; one run http, one local) |
 | `deploy/install.sh` | install/update on CT 103 from git into the Demucs venv |
 | `deploy/gpu/` | the GPU box: `llama-swap.yaml` (models + groups), `demucs_server.py` (Demucs over HTTP), `llama-swap.service` |
 
@@ -95,9 +95,9 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
    progress events (lines voiced, images seen) for progress bars; until then the server can show stderr.
 2. GPU box (`feat/gpu-box`): `deploy/gpu/` config, Demucs wrapper, service. Ivan's full CT 103 config
    (+ Qwen3.8 presets for Hermes/OpenCode) is `notes/ct103-llama-swap.yaml`. Not deployed until 3.
-3. Engine talks to llama-swap (drop router-only calls: `GET /models`, `/models/unload`, `/tts` by
-   body model): on-demand loading, TTS via `/upstream`, transcription and separation over HTTP; then
-   switch CT 103 to llama-swap (disable `llama.service`) and do a real excerpt run.
+3. Engine 0.7.0 (`feat/engine-llama-swap`): talks to llama-swap only (router support dropped);
+   `nemo.backend` / `demucs.backend` = `http` (default) | `local`. Then switch CT 103 to llama-swap
+   (disable `llama.service`, `notes/ct103-llama-swap.yaml`) and do a real excerpt run.
 4. Server, one PR at a time: `/health` → list runs (serde) → job queue running the engine →
    progress streaming → reviews and Shorts endpoints → router model management → token auth → serve the UI.
 5. Web UI on top of the server.
@@ -120,3 +120,6 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
   differences ≲ 0.01 are noise with 4 sentences × 1 seed (Nov 12: candidates 0.966 / 0.957 / 0.930,
   Ivan's ref.wav 0.956; ranking matched his ear). The score shortlists, the ear decides close calls.
 - Log noise from the speaker model (torch `key_padding_mask` warning, HF Hub token notice).
+- Separation uploads `audio44.wav` as WAV (~300 MB for 30 min) and gets two WAVs back; FLAC would
+  halve that once localdub and the GPU box are on different machines.
+- `localdub check` tests the hunspell `bg_BG` dictionary only; it should check the channels' dictionaries.

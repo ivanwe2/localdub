@@ -21,6 +21,8 @@ def events_of(capsys):
 
 
 def test_automatic_run_with_shorts(fake_env, capsys):
+    """The default setup: every model behind the model server (llama-swap), nothing run locally."""
+    fake_env["use"]()
     rc = main(["run", str(fake_env["video"]), "--channel", "auto", "--name", "auto", "--no-review", "--shorts", "1",
                "--json"])
     assert rc == 0
@@ -38,9 +40,16 @@ def test_automatic_run_with_shorts(fake_env, capsys):
     assert len(state["shorts"]["original"]) == 1 and len(state["shorts"]["dub"]) == 1
     profile = json.loads((fake_env["home"] / "channels" / "auto" / "profile.json").read_text())
     assert profile["voice_ref"] == "voice.wav" and profile["corrections"] == {}  # --no-review learns nothing
+    heard = (fake_env["state"] / "asr-http.log").read_text(encoding="utf-8").split()
+    assert "part00.wav" in heard and any("-s42.wav" in f for f in heard)  # transcription and take checks, over HTTP
+    assert (run / "vocals.wav").exists() and (run / "music.wav").exists()  # separated through the Demucs wrapper
 
 
 def test_reviewed_run_teaches_the_channel(fake_env, capsys):
+    """Nemotron and Demucs run on this machine (the local backends), only the LLMs and TTS on the server."""
+    fake_env["use"](nemo="local", demucs="local")
+    local_log = fake_env["state"] / "asr-local.log"
+    before = local_log.read_text(encoding="utf-8") if local_log.exists() else ""
     video = str(fake_env["video"])
     assert main(["run", video, "--channel", "taught", "--name", "taught", "--json"]) == 3
     result = events_of(capsys)[-1]
@@ -69,3 +78,4 @@ def test_reviewed_run_teaches_the_channel(fake_env, capsys):
     spelled = json.loads((fake_env["home"] / "runs" / "taught-2" / "spelling.json").read_text(encoding="utf-8"))
     learned = [b for r in spelled.values() for a, b in r["learned"]]
     assert "наемите" in learned and "Кирчо" in learned
+    assert len(local_log.read_text(encoding="utf-8")) > len(before)  # the local nemo-speech did the transcribing
