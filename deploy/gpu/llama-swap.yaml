@@ -1,0 +1,86 @@
+# llama-swap on the GPU box: one URL (and one API key) for every model localdub uses. llama-swap starts
+# a model's server when a request names it and stops others that can't run beside it (see routing).
+# https://github.com/mostlygeek/llama-swap
+#
+# localdub uses these model names (settings.py): gemma4-31b (text), gemma4-31b-vision (Shorts),
+# qwen3-tts (voice, through /upstream/qwen3-tts/tts), nemotron (transcription and the take check,
+# /v1/audio/transcriptions) and demucs (separation, /upstream/demucs/separate).
+#
+# The paths are the reference box's (2x 16 GB GPUs); change the macros for yours. Add your own models
+# to `models` and to a group.
+
+healthCheckTimeout: 300  # seconds; Nemotron and the 31B models take a minute or two to load
+logToStdout: both        # llama-swap's own log and every model server's output, to journald
+
+apiKeys:
+  - "${env.LLAMA_API_KEY}"  # from /etc/llama.env (llama-swap.service); clients send Authorization: Bearer
+
+macros:
+  llama-server: /root/llama-bin/llama-server --host 127.0.0.1 --port ${PORT} --flash-attn on --parallel 1
+  nemo-speech: /root/.local/bin/nemo-speech
+  nemotron-dir: /root/models/nemotron
+  demucs-python: /root/venvs/demucs-gpu/bin/python
+  localdub-dir: /root/localdub
+
+models:
+  gemma4-31b:
+    name: Gemma 4 31B
+    description: text for localdub (spelling, translation, Shorts selection); both GPUs, 32K, MTP draft
+    cmd: |
+      ${llama-server} --no-mmproj
+      --hf-repo unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL
+      --split-mode tensor --fit off --cache-type-k f16 --cache-type-v f16 --ctx-size 32768
+      --temp 1.0 --top-p 0.95 --top-k 64
+      --model-draft /root/models/gemma/mtp-gemma-4-31B-it-Q8_0.gguf --spec-type draft-mtp --spec-draft-n-max 4
+
+  gemma4-31b-vision:
+    name: Gemma 4 31B vision
+    description: looks at video frames for Shorts; both GPUs, 8K, no draft
+    cmd: |
+      ${llama-server}
+      --hf-repo unsloth/gemma-4-31B-it-GGUF:UD-Q4_K_XL
+      --split-mode tensor --fit off --cache-type-k f16 --cache-type-v f16 --ctx-size 8192
+      --temp 1.0 --top-p 0.95 --top-k 64
+
+  qwen3-tts:
+    name: Qwen3-TTS 1.7B Base
+    description: voice clone on GPU 0 (its codec loads as the mmproj); POST /upstream/qwen3-tts/tts
+    env:
+      - "CUDA_VISIBLE_DEVICES=0"
+    cmd: |
+      ${llama-server}
+      --hf-repo ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF:Q8_0 --ctx-size 4096
+
+  nemotron:
+    name: Nemotron 3.5 Transcribe
+    description: transcription with word times and the take check, on GPU 1 (about 14 GB)
+    env:
+      - "CUDA_VISIBLE_DEVICES=1"  # the only GPU it sees, so it is cuda:0 below
+    cmd: |
+      ${nemo-speech} serve --host 127.0.0.1 --port ${PORT} --no-ui
+      --asr-model ${nemotron-dir}/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-AD-Q2_0_M.gguf
+      --config ${nemotron-dir}/salm-16gb.yaml --device cuda:0
+    checkEndpoint: /v1/models
+    useModelName: salm  # nemo-speech only answers to the name of the model it loaded
+
+  demucs:
+    name: Demucs htdemucs_ft
+    description: splits the voice from music and effects, on GPU 0; POST /upstream/demucs/separate
+    cmd: |
+      ${demucs-python} ${localdub-dir}/deploy/gpu/demucs_server.py --port ${PORT}
+      --model htdemucs_ft --device cuda:0
+    checkEndpoint: /health
+
+routing:
+  router:
+    use: group
+    settings:
+      groups:
+        big:                # each needs (nearly) a whole GPU or both: one at a time
+          swap: true
+          exclusive: true   # loading one stops the voicing group
+          members: [gemma4-31b, gemma4-31b-vision, demucs]
+        voicing:            # voice clone on GPU 0 and its check on GPU 1 run side by side
+          swap: false
+          exclusive: true
+          members: [qwen3-tts, nemotron]
