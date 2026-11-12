@@ -28,3 +28,19 @@ jobs:
       - run: python -m pyflakes src tests deploy
       - name: Tests (the slow ones run whole videos against fake model servers)
         run: python -m pytest -q
+
+  server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v7
+      - name: Rust toolchain (the version pinned in rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2   # keeps compiled dependencies between runs
+        with:
+          workspaces: server
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
