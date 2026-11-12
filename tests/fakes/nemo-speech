@@ -1,36 +1,29 @@
 #!/usr/bin/env python3
-"""Fake nemo-speech. partNN.wav -> the fixture's words for that stretch; NNNN-hash-sSEED.wav (a voice take)
--> the text that was voiced, with the last word dropped for some lines (a clipped ending)."""
+"""Fake nemo-speech (the local backend): `transcribe <folder>` writes <stem>.json for each WAV.
+What it hears is in fake_asr.py."""
 import hashlib
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
+
+from fake_asr import part, take, wav_seconds
 
 a = sys.argv[1:]
 assert a[0] == "transcribe" and "--model" in a and "--config" in a and a[a.index("--format") + 1] == "json"
 src, out = Path(a[1]), Path(a[a.index("--output-dir") + 1])
-lang = a[a.index("-l") + 1]
 out.mkdir(parents=True, exist_ok=True)
 state = Path(os.environ["LOCALDUB_FAKE_STATE"])
-
-
-def dur(f):
-    return float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(f)],
-                                capture_output=True, text=True).stdout)
-
+with open(state / "asr-local.log", "a", encoding="utf-8") as f:
+    f.write(f"{src}\n")
 
 files = sorted(src.glob("*.wav"))
 if files and files[0].stem.startswith("part"):
     words = json.loads(Path(os.environ["LOCALDUB_FAKE_WORDS"]).read_text(encoding="utf-8"))
     offset = 0.0
     for f in files:
-        d = dur(f)
-        ws = [{"word": w["word"], "start": round(w["start"] - offset, 3), "end": round(w["end"] - offset, 3)}
-              for w in words if offset <= w["start"] < offset + d]
-        (out / f"{f.stem}.json").write_text(json.dumps({"text": " ".join(w["word"] for w in ws), "words": ws},
-                                                       ensure_ascii=False), encoding="utf-8")
+        d = wav_seconds(str(f))
+        (out / f"{f.stem}.json").write_text(json.dumps(part(words, offset, d), ensure_ascii=False), encoding="utf-8")
         offset += d
 else:
     run = src.parent.parent
@@ -40,12 +33,5 @@ else:
     texts = [json.loads(line) for line in open(state / "tts.log", encoding="utf-8")]
     by_hash = {hashlib.md5((ref + t).encode()).hexdigest()[:8]: t for t in texts}
     for f in files:
-        i, h, seed = int(f.stem[:4]), f.stem.split("-")[1], int(f.stem.rsplit("-s", 1)[1])
-        words = by_hash[h].split()
-        if i % 11 == 0 or (seed == 42 and i % 4 == 0):
-            words = words[:-1]
-        d = dur(f)
-        step = d / max(1, len(words))
-        (out / f"{f.stem}.json").write_text(json.dumps({
-            "text": " ".join(words),
-            "words": [{"word": w, "start": round(k * step, 3), "end": round((k + 1) * step, 3)} for k, w in enumerate(words)]}))
+        voiced = by_hash[f.stem.split("-")[1]]
+        (out / f"{f.stem}.json").write_text(json.dumps(take(f.stem, voiced, wav_seconds(str(f)))), encoding="utf-8")

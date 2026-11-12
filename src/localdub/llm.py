@@ -1,14 +1,29 @@
-"""llama-server (router mode) over HTTP: chat, TTS, and loading/unloading presets."""
+"""The model server over HTTP: llama-swap on the GPU box (deploy/gpu/llama-swap.yaml).
+
+One URL and one API key for every model: chat and vision (/v1/chat/completions), the voice clone
+(llama.cpp's /tts behind /upstream/<model>/), transcription (/v1/audio/transcriptions) and voice/music
+separation (/upstream/<model>/separate). llama-swap starts each model's server when a request names it
+and stops the ones that can't run beside it, so localdub only frees the GPUs itself when it runs a
+tool on this machine instead (the "local" backends of Nemotron and Demucs).
+"""
 
 from __future__ import annotations
 
 import json
 import os
 import re
+import shutil
 import sys
+import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
+import zipfile
+from pathlib import Path
+
+CHUNK = 1 << 20  # copy large bodies 1 MB at a time
 
 
 class LLMError(RuntimeError):
@@ -83,48 +98,68 @@ def api_key(settings: dict) -> str:
     return ""
 
 
+def multipart(fields: list[tuple[str, str]], file_field: str, filename: str, content: bytes,
+              content_type: str = "audio/wav") -> tuple[bytes, str]:
+    """An upload like an HTML form sends it (multipart/form-data): text fields plus one file.
+    Returns the request body and the Content-Type header that goes with it.
+
+    The body is a list of parts, each starting with a line `--<boundary>`, then its headers, an empty
+    line and its content; a final `--<boundary>--` ends it. Lines end with CRLF (\\r\\n)."""
+    boundary = uuid.uuid4().hex  # any string that can't occur in the content
+    out = []
+    for name, value in fields:
+        out.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
+
+    out.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{file_field}"; filename="{filename}"\r\nContent-Type: {content_type}\r\n\r\n'.encode())
+    out.append(content)
+    out.append(f'\r\n--{boundary}--\r\n'.encode())
+    return b"".join(out), f"multipart/form-data; boundary={boundary}"
+
+
 class Server:
     def __init__(self, settings: dict):
         self.url = settings["llm_url"].rstrip("/")
         self.key = api_key(settings)
         self.stats: list[tuple[str, float, int, float]] = []
 
-    def _req(self, method: str, path: str, body: dict | None = None, timeout: float = 1800, raw: bool = False):
-        data = json.dumps(body).encode() if body is not None else None
-        headers = {"Content-Type": "application/json"}
+    def _open(self, method: str, path: str, data=None, headers: dict | None = None, timeout: float = 1800):
+        """Send one request and return the open response; `data` is bytes or an open file."""
+        headers = dict(headers or {})
         if self.key:
             headers["Authorization"] = f"Bearer {self.key}"
         req = urllib.request.Request(self.url + path, data=data, method=method, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                payload = r.read()
+            return urllib.request.urlopen(req, timeout=timeout)
         except urllib.error.HTTPError as e:
             raise LLMError(f"{method} {path}: HTTP {e.code} {e.read()[:300]!r}") from None
         except urllib.error.URLError as e:
-            raise LLMError(f"{method} {path}: {e.reason} (is the llama service running? llama-start)") from None
+            raise LLMError(f"{method} {path}: {e.reason} (is llama-swap running at {self.url}?)") from None
+
+    def _req(self, method: str, path: str, body: dict | None = None, timeout: float = 1800, raw: bool = False):
+        data = json.dumps(body).encode() if body is not None else None
+        with self._open(method, path, data, {"Content-Type": "application/json"}, timeout) as r:
+            payload = r.read()
         return payload if raw else json.loads(payload)
 
-    # --- presets ------------------------------------------------------------------------
+    # --- models -----------------------------------------------------------------------------
 
-    def models(self) -> dict[str, str]:
-        out = {}
-        for m in self._req("GET", "/models", timeout=30).get("data", []):
-            st = m.get("status")
-            out[m["id"]] = st.get("value") if isinstance(st, dict) else str(st)
-        return out
+    def models(self) -> list[str]:
+        """The model names the server offers (whether running or not)."""
+        return [m["id"] for m in self._req("GET", "/v1/models", timeout=30).get("data", [])]
+
+    def running(self) -> list[str]:
+        """The models whose servers are up, starting or still stopping."""
+        return [m["model"] for m in self._req("GET", "/running", timeout=30).get("running", [])
+                if m.get("state") not in ("stopped", "shutdown")]
 
     def unload_all(self, keep: str | None = None) -> None:
-        """Free the GPUs for tools outside the router (Demucs, Nemotron); `keep` stays loaded."""
-        for name, status in self.models().items():
-            if name != keep and status in ("loaded", "loading", "sleeping"):
+        """Free the GPUs for a tool that runs on this machine (local Demucs or Nemotron); `keep` stays."""
+        for name in self.running():
+            if name != keep:
                 print(f"   unloading {name} to free the GPUs", file=sys.stderr)
-                try:
-                    self._req("POST", "/models/unload", {"model": name}, timeout=60)
-                except LLMError as e:
-                    if "not running" not in str(e):
-                        raise
+                self._req("POST", f"/api/models/unload/{urllib.parse.quote(name)}", timeout=120, raw=True)
         deadline = time.monotonic() + 120
-        while any(s in ("loaded", "loading") for n, s in self.models().items() if n != keep):
+        while [n for n in self.running() if n != keep]:
             if time.monotonic() > deadline:
                 raise LLMError("models did not unload within 2 minutes")
             time.sleep(1)
@@ -178,11 +213,39 @@ class Server:
                   quiet: bool = False) -> str:
         return self._chat(self._body(model, system, user, effort, max_tokens), label, quiet)
 
-    # --- TTS --------------------------------------------------------------------------------------
+    # --- voice, transcription, separation ----------------------------------------------------------
 
     def tts(self, model: str, text: str, lang: str, ref_b64: str, seed: int) -> bytes:
-        body = {"model": model, "input": text, "lang": lang, "seed": seed, "speaker_ref_b64": ref_b64}
-        data = self._req("POST", "/tts", body, timeout=900, raw=True)
+        """Voice clone: llama.cpp's /tts on that model's own server, through llama-swap's passthrough."""
+        body = {"input": text, "lang": lang, "seed": seed, "speaker_ref_b64": ref_b64}
+        data = self._req("POST", f"/upstream/{model}/tts", body, timeout=900, raw=True)
         if data[:4] != b"RIFF":
             raise LLMError(f"/tts returned no audio for {text!r}: {data[:300]!r}")
         return data
+
+    def transcribe(self, model: str, wav: Path, lang: str) -> dict:
+        """Speech to text with word times: {"text": ..., "words": [{"word", "start", "end"}, ...]}."""
+        fields = [("model", model), ("language", lang), ("response_format", "verbose_json"),
+                  ("timestamp_granularities[]", "word")]
+        body, ctype = multipart(fields, "file", wav.name, wav.read_bytes())
+        with self._open("POST", "/v1/audio/transcriptions", body, {"Content-Type": ctype}) as r:
+            got = json.loads(r.read())
+        if "words" not in got:
+            raise LLMError(f"transcription of {wav.name} returned no words: {str(got)[:300]}")
+        return got
+
+    def separate(self, model: str, audio: Path, vocals: Path, music: Path) -> None:
+        """Split `audio` into his voice and everything else (deploy/gpu/demucs_server.py behind llama-swap).
+        The answer is a ZIP with vocals.wav and no_vocals.wav; both directions are streamed to disk."""
+        headers = {"Content-Type": "audio/wav", "Content-Length": str(audio.stat().st_size)}
+        with tempfile.TemporaryFile() as z:
+            # the read timeout must outlast the separation itself: nothing comes back until it's done
+            with audio.open("rb") as f, self._open("POST", f"/upstream/{model}/separate", f, headers, 7200) as r:
+                shutil.copyfileobj(r, z, CHUNK)
+            try:
+                with zipfile.ZipFile(z) as stems:
+                    for name, dest in (("vocals.wav", vocals), ("no_vocals.wav", music)):
+                        with stems.open(name) as src, dest.open("wb") as out:
+                            shutil.copyfileobj(src, out, CHUNK)
+            except (zipfile.BadZipFile, KeyError) as e:
+                raise LLMError(f"separation returned no stems ({e})") from None

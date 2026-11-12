@@ -230,7 +230,8 @@ def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedde
               f"{time.monotonic() - t0:.0f}s, checking {len(to_check)}", file=sys.stderr)
         if to_check:
             nemo = settings["nemo"]
-            got = transcribe_folder(nemo, check_dir, work / f"check-{round_no}-out", lang, nemo["check_device"])
+            got = transcribe_folder(settings, server, check_dir, work / f"check-{round_no}-out", lang,
+                                    nemo["check_device"])
             for s in pending:
                 name = take_name(s, seed)
                 if name in to_check:

@@ -101,17 +101,19 @@ per line, and the last line is always the result:
 
 Built and run on a Proxmox LXC with 2× RTX 5060 Ti 16 GB; a 30-minute video takes about 30 minutes.
 
-- **llama.cpp** server in router mode (`--models-preset`) with these presets: a text model
-  (`gemma4-31b`), the same model with its vision projector (`gemma4-31b-vision`, `no-mmproj = false`,
-  8K context) and Qwen3-TTS (`qwen3-tts`, `ggml-org/Qwen3-TTS-12Hz-1.7B-Base-GGUF`). localdub unloads
-  models itself when other tools need the GPUs.
-- **NeMo-Speech.cpp** (nightly) with Nemotron 3.5 Transcribe and a config that fits your VRAM.
-- A **Python venv with CUDA torch and Demucs** (`pip install demucs numpy`); localdub installs into it.
-- **ffmpeg** with libass, **hunspell** with the source language's dictionary, **DejaVu Sans**.
+- **A model server: [llama-swap](https://github.com/mostlygeek/llama-swap)** on a GPU machine with
+  the models localdub uses: Gemma 4 31B (text and vision) and Qwen3-TTS on llama.cpp, Nemotron 3.5
+  Transcribe on `nemo-speech serve`, and Demucs through the small wrapper in `deploy/gpu/`. llama-swap
+  starts and stops them as requests need them. See [deploy/gpu/README.md](deploy/gpu/README.md).
+- Where localdub runs: Python ≥ 3.10, **ffmpeg** with libass, **hunspell** with the source language's
+  dictionary, **DejaVu Sans**; for picking the voice by likeness also `transformers` (`.[voice]`, CPU).
 
-Paths and model names are settings: create `~/dub/settings.json` with just the keys that differ
-from `src/localdub/settings.py` (e.g. `{"translate_effort": "low", "demucs": {"device": "cuda:1"}}`).
-The llama API key comes from `$LLAMA_API_KEY` or the `LLAMA_API_KEY=` line of `/etc/llama.env`.
+Settings: create `~/dub/settings.json` with just the keys that differ from `src/localdub/settings.py`,
+e.g. `{"llm_url": "http://gpu-box:9876", "translate_effort": "low"}`. The API key comes from
+`$LLAMA_API_KEY` or the `LLAMA_API_KEY=` line of `/etc/llama.env`. To run Nemotron or Demucs on the
+same machine as localdub instead of behind the server, set `"nemo": {"backend": "local"}` or
+`"demucs": {"backend": "local"}` (paths and devices are in the same sections); localdub then frees
+the GPUs before running them.
 
 ## Install
 
@@ -129,9 +131,11 @@ python -m pytest -q -m "not slow"     # unit tests, seconds
 python -m pytest -q                   # plus two whole runs against fake model servers, ~2 min
 ```
 
-The end-to-end tests run the real pipeline against stand-ins (`tests/fakes/`): a fake llama.cpp
-router (chat, vision, TTS), a fake `nemo-speech` and a fake Demucs, on a generated video with made-up
-Bulgarian sentences. They need ffmpeg, hunspell-bg and DejaVu fonts, nothing else.
+The end-to-end tests run the real pipeline against stand-ins (`tests/fakes/`): a fake llama-swap
+(chat, vision, TTS, transcription; separation goes on to the real `deploy/gpu/demucs_server.py`
+running a fake Demucs), plus a fake `nemo-speech` for the local backend, on a generated video with
+made-up Bulgarian sentences. One run uses the server for everything, the other the local backends.
+They need ffmpeg, hunspell-bg and DejaVu fonts, nothing else.
 
 ## License
 
