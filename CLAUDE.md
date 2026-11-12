@@ -38,6 +38,7 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 | `src/localdub/review.py`, `media.py`, `asr.py`, `settings.py` | review files, ffmpeg, nemo-speech, defaults + channel profiles |
 | `tests/` | unit tests; `test_e2e.py` runs whole videos against `tests/fakes/` |
 | `deploy/install.sh` | install/update on CT 103 from git into the Demucs venv |
+| `deploy/gpu/` | the GPU box: `llama-swap.yaml` (models + groups), `demucs_server.py` (Demucs over HTTP), `llama-swap.service` |
 
 ## Conventions
 
@@ -65,12 +66,17 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 ## Architecture (decided Nov 11–12, 2026)
 
 - **Deployment target**: one CPU-only localdub container (server + UI + engine + ffmpeg + dictionaries,
-  speaker model on CPU) configured with URLs and keys, talking to model services on the GPU box:
-  the llama.cpp router (text, vision, TTS; list/load/unload presets through its API), transcription
-  (`nemo-speech serve`, API to be confirmed, word timestamps needed) and separation (Demucs has no
-  server: a small HTTP wrapper on the GPU box, or CPU in the container). The engine keeps a "local"
-  backend (run the programs directly) for single-machine setups. Plan: dev container → engine
-  backends local|http for transcription and separation → Rust server → app image + docker compose.
+  speaker model on CPU) configured with one URL and key: **llama-swap** on the GPU box (decided Nov 12,
+  replaces the llama.cpp router). llama-swap starts model servers on demand and its `routing` groups
+  decide what runs together: `big` (31B models, Demucs: one at a time) and `voicing` (Qwen3-TTS on
+  GPU 0 + Nemotron on GPU 1, side by side). Routes: chat `/v1/chat/completions`; TTS
+  `/upstream/qwen3-tts/tts`; transcription `/v1/audio/transcriptions` (nemo-speech serve,
+  `useModelName: salm`, verbose_json with word times); separation `/upstream/demucs/separate`
+  (`deploy/gpu/demucs_server.py`, returns a ZIP of vocals.wav + no_vocals.wav). Status `/running`,
+  free GPUs `POST /api/models/unload`. Verified on CT 103 Nov 12 (PoC: upload routing, passthrough,
+  both voicing models loaded: 4.4 GB GPU 0, 14.5 GB GPU 1). Model servers inherit llama-swap's
+  environment (incl. LLAMA_API_KEY: llama-server then checks the key too). The engine keeps a
+  "local" backend (run the programs directly) for single-machine setups.
 
 - **engine**: this Python package. Python only where the AI libraries need it.
 - **server**: Rust, axum + tokio, in `server/`. REST API over the runs folder, one GPU job at a time
@@ -87,8 +93,11 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 1. Engine `--json` (0.6.0): JSON Lines on stdout (`start`, `stage`, `check`, final `result`), human
    messages on stderr; contract in `src/localdub/events.py` and README. Possible later: per-stage
    progress events (lines voiced, images seen) for progress bars; until then the server can show stderr.
-2. Dev container (branch `chore/devcontainer`), then Dependabot and branch protection on `main`.
-3. Engine: transcription and separation backends, local | http (check `nemo-speech serve --help` first).
+2. GPU box (`feat/gpu-box`): `deploy/gpu/` config, Demucs wrapper, service. Ivan's full CT 103 config
+   (+ Qwen3.8 presets for Hermes/OpenCode) is `notes/ct103-llama-swap.yaml`. Not deployed until 3.
+3. Engine talks to llama-swap (drop router-only calls: `GET /models`, `/models/unload`, `/tts` by
+   body model): on-demand loading, TTS via `/upstream`, transcription and separation over HTTP; then
+   switch CT 103 to llama-swap (disable `llama.service`) and do a real excerpt run.
 4. Server, one PR at a time: `/health` → list runs (serde) → job queue running the engine →
    progress streaming → reviews and Shorts endpoints → router model management → token auth → serve the UI.
 5. Web UI on top of the server.

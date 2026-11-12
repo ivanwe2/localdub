@@ -1,0 +1,19 @@
+# systemd unit for llama-swap on the GPU box:
+#   cp llama-swap.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now llama-swap
+# /etc/llama.env (mode 600) holds LLAMA_API_KEY and LLAMA_CACHE; the model servers inherit both.
+[Unit]
+Description=llama-swap: model servers on demand (llama.cpp, Nemotron, Demucs)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/llama.env
+ExecStart=/root/llama-swap/llama-swap --config /root/llama-swap/config.yaml --listen 0.0.0.0:9876
+Restart=on-failure
+RestartSec=5
+# stop llama-swap first so it can stop its model servers cleanly; anything left gets killed after 30 s
+KillMode=mixed
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
