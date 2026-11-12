@@ -7,6 +7,7 @@ dist/
 .pytest_cache/
 node_modules/
 web/dist/
+target/
 # never commit media or model files
 *.mp4
 *.mkv

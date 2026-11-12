@@ -95,9 +95,9 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
    progress events (lines voiced, images seen) for progress bars; until then the server can show stderr.
 2. GPU box (`feat/gpu-box`): `deploy/gpu/` config, Demucs wrapper, service. Ivan's full CT 103 config
    (+ Qwen3.8 presets for Hermes/OpenCode) is `notes/ct103-llama-swap.yaml`. Not deployed until 3.
-3. Engine 0.7.0 (`feat/engine-llama-swap`): talks to llama-swap only (router support dropped);
-   `nemo.backend` / `demucs.backend` = `http` (default) | `local`. Then switch CT 103 to llama-swap
-   (disable `llama.service`, `notes/ct103-llama-swap.yaml`) and do a real excerpt run.
+3. Engine 0.7.0: talks to llama-swap only (router support dropped); `nemo.backend` /
+   `demucs.backend` = `http` (default) | `local`. CT 103 switched to llama-swap Nov 12; first full
+   run with Shorts worked (8.3 min, Ivan: Shorts "perfect").
 4. Server, one PR at a time: `/health` → list runs (serde) → job queue running the engine →
    progress streaming → reviews and Shorts endpoints → router model management → token auth → serve the UI.
 5. Web UI on top of the server.
@@ -123,3 +123,8 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 - Separation uploads `audio44.wav` as WAV (~300 MB for 30 min) and gets two WAVs back; FLAC would
   halve that once localdub and the GPU box are on different machines.
 - `localdub check` tests the hunspell `bg_BG` dictionary only; it should check the channels' dictionaries.
+- Shorts selection takes ~2 min per language even on a 3-minute excerpt (~10K tokens at effort "low").
+- llama-servers behind llama-swap inherit `LLAMA_API_KEY` and check it again; llama-swap's own
+  unauthenticated call after a health check logs `unauthorized: Invalid API Key` (harmless).
+- The voice stage didn't get faster with Nemotron kept loaded (108 s → 105 s): the per-round reload
+  wasn't the bottleneck; TTS (~30 s per round) and the checks are.
