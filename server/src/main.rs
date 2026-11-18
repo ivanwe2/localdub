@@ -8,6 +8,7 @@
 //!                           trusted LAN.
 //!   LOCALDUB_ALLOWED_HOSTS  more names the browser may use to reach it, comma-separated, e.g.
 //!                           "192.168.0.71:8080,llama-cpp:8080" (localhost always works)
+//!   LOCALDUB_WEB            the built web UI (default: web/dist or ../web/dist, if it exists)
 
 use std::path::PathBuf;
 
@@ -30,14 +31,28 @@ async fn main() -> std::io::Result<()> {
         hosts.extend(extra.map(String::from));
     }
 
+    let web = match std::env::var("LOCALDUB_WEB") {
+        Ok(dir) => Some(PathBuf::from(dir)),
+        Err(_) => ["web/dist", "../web/dist"]
+            .into_iter()
+            .map(PathBuf::from)
+            .find(|dir| dir.join("index.html").is_file()),
+    };
+
     let listener = tokio::net::TcpListener::bind(&listen).await?;
     eprintln!(
-        "localdub-server: http://{listen}, runs in {}, engine: {}, answers to: {}",
+        "localdub-server: http://{listen}, runs in {}, engine: {}, answers to: {}, web UI: {}",
         home.display(),
         engine.join(" "),
-        hosts.join(", ")
+        hosts.join(", "),
+        web.as_ref()
+            .map_or("none (API only)".to_string(), |d| d.display().to_string())
     );
-    let app = allow_hosts(app(AppState::new(home, engine)), hosts);
+    let mut state = AppState::new(home, engine);
+    if let Some(dir) = web {
+        state = state.with_web(dir);
+    }
+    let app = allow_hosts(app(state), hosts);
     axum::serve(listener, app).await?;
     Ok(())
 }

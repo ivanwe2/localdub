@@ -8,8 +8,10 @@
 //!  "video": "/videos/market.mp4", "seconds": 170.0}
 //! ```
 //!
-//! `seconds` (the length of the audio) only appears once the prep stage has run.
+//! `seconds` (the length of the audio) only appears once the prep stage has run; `outputs` (the
+//! dubbed video and subtitles) once the mix stage has, and `shorts` once Shorts are rendered.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::Serialize;
@@ -30,6 +32,20 @@ pub struct RunSummary {
     pub done: Vec<String>,
     /// The dubbed video is ready: the mix stage is done.
     pub finished: bool,
+    /// The run's results so far.
+    pub files: RunFiles,
+}
+
+/// The results of a run, as paths relative to its folder: the browser fetches them from
+/// `/files/<run name>/<path>`.
+#[derive(Debug, Default, PartialEq, Serialize)]
+pub struct RunFiles {
+    /// The dubbed video.
+    pub video: Option<String>,
+    /// The subtitles: the dubbed language first, then the original.
+    pub subtitles: Vec<String>,
+    /// The rendered Shorts, in both languages.
+    pub shorts: Vec<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -39,6 +55,26 @@ struct StateFile {
     created: String,
     done: Vec<String>,
     seconds: Option<f64>,
+    #[serde(default)]
+    outputs: Outputs,
+    /// Language ("dub" / "original") → the Shorts' paths.
+    #[serde(default)]
+    shorts: BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Default, serde::Deserialize)]
+struct Outputs {
+    video: Option<String>,
+    #[serde(default)]
+    subtitles: Vec<String>,
+}
+
+/// An absolute path the engine wrote, relative to the run's folder. It's found by its
+/// `/runs/<name>/` part, so the server and engine needn't spell the home folder the same way.
+fn in_run(path: &str, name: &str) -> Option<String> {
+    let marker = format!("/runs/{name}/");
+    path.find(&marker)
+        .map(|i| path[i + marker.len()..].to_string())
 }
 
 /// Every run under `home/runs`, newest first.
@@ -73,15 +109,33 @@ pub async fn list_runs(home: &Path) -> std::io::Result<Vec<RunSummary>> {
                 continue;
             }
         };
+        let name = entry.file_name().to_string_lossy().into_owned();
         let finished = state.done.iter().any(|s| s == "mix");
+        let in_this_run = |path: &String| in_run(path, &name);
+        let files = RunFiles {
+            video: state.outputs.video.as_ref().and_then(in_this_run),
+            subtitles: state
+                .outputs
+                .subtitles
+                .iter()
+                .filter_map(in_this_run)
+                .collect(),
+            shorts: state
+                .shorts
+                .values()
+                .flatten()
+                .filter_map(in_this_run)
+                .collect(),
+        };
         runs.push(RunSummary {
-            name: entry.file_name().to_string_lossy().into_owned(),
+            name,
             channel: state.channel,
             created: state.created,
             source: state.source,
             seconds: state.seconds,
             done: state.done,
             finished,
+            files,
         });
     }
 
@@ -137,6 +191,7 @@ mod tests {
                     seconds: Some(120.0),
                     done: strings(&["prep"]),
                     finished: false,
+                    files: RunFiles::default(),
                 },
                 RunSummary {
                     name: "market".into(),
@@ -156,8 +211,40 @@ mod tests {
                         "mix",
                     ]),
                     finished: true,
+                    files: RunFiles {
+                        video: Some("market.en.mp4".into()),
+                        ..RunFiles::default()
+                    },
                 },
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_finished_run_lists_its_results_relative_to_its_folder() {
+        let home = tempfile::tempdir().unwrap();
+        write_run(
+            home.path(),
+            "market",
+            r#"{"source": "/videos/market.mp4", "channel": "c", "created": "2026-11-10T09:00:00",
+                "done": ["prep", "mix"], "timings": {},
+                "outputs": {"video": "/root/dub/runs/market/market.en.mp4",
+                            "subtitles": ["/root/dub/runs/market/market.en.srt", "/root/dub/runs/market/market.bg.srt"],
+                            "check": "/root/dub/runs/market/check.txt", "lines_to_check": 0},
+                "shorts": {"original": ["/root/dub/runs/market/shorts/original/short-1-a.mp4"],
+                           "dub": ["/root/dub/runs/market/shorts/dub/short-2-b.mp4", "/elsewhere/x.mp4"]}}"#,
+        );
+
+        let runs = list_runs(home.path()).await.unwrap();
+
+        assert_eq!(
+            runs[0].files,
+            RunFiles {
+                video: Some("market.en.mp4".into()),
+                subtitles: strings(&["market.en.srt", "market.bg.srt"]),
+                shorts: strings(&["shorts/dub/short-2-b.mp4", "shorts/original/short-1-a.mp4"]),
+            },
+            "a path outside the run's folder is left out"
         );
     }
 
