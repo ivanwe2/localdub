@@ -1,6 +1,7 @@
 // VS Code: "Dev Containers: Reopen in Container". Everything builds and runs inside; the laptop needs
 // only Docker Desktop and VS Code. The fixed container name lets tools outside VS Code run commands
-// in it too:  docker exec -w /workspaces/localdub localdub-dev python -m pytest -q
+// in it too (as the dev user, so build files don't end up owned by root):
+//   docker exec -u dev -w /workspaces/localdub localdub-dev python -m pytest -q
 {
   "name": "localdub",
   "build": { "dockerfile": "Dockerfile" },
