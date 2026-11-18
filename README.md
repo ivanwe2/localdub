@@ -143,6 +143,17 @@ server/target/release/localdub-server               # http://127.0.0.1:8080
 | `LOCALDUB_ALLOWED_HOSTS` | | other names the browser uses to reach it, e.g. `192.168.0.71:8080` |
 | `LOCALDUB_WEB` | `web/dist` | the built page |
 
+To put it on another Linux machine (no Rust or Node needed there), build a package in the dev
+container and install it as a systemd service; it listens on that machine only, so open it from
+your laptop through an SSH tunnel:
+
+```
+bash deploy/server/build.sh                          # dev container: dist/localdub-app.tar.gz
+scp dist/localdub-app.tar.gz root@gpu-box:           # laptop
+tar xzf localdub-app.tar.gz && bash localdub-app/install.sh     # on the machine, as root
+ssh -N -L 8080:127.0.0.1:8080 root@gpu-box           # laptop, then open http://localhost:8080
+```
+
 The API: `GET /api/runs` (every run and its files), `POST /api/runs` (start one: `video`, `channel`,
 `name`, optional `no_review`, `shorts`), `GET /api/job` and `GET /api/job/events` (the current run,
 live as Server-Sent Events), `GET /files/<run>/<path>` (a run's files).
