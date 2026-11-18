@@ -41,10 +41,6 @@ pub enum Event {
         waiting_for: Option<WaitingFor>,
         error: Option<String>,
     },
-    // TODO(Ivan), step 3a: the other two cases, `Stage` and `Result`, like `Start` above.
-    // See the tests at the bottom for exactly which fields and types they need.
-    /// Any other kind of event (e.g. "check"): recognised, and ignored, so a newer engine with new
-    /// events doesn't break the server.
     #[serde(other)]
     Other,
 }
@@ -74,7 +70,6 @@ pub struct WaitingFor {
 /// One line of the engine's output as an event; None if the line isn't one (not JSON, or no
 /// "event" field).
 pub fn parse_line(line: &str) -> Option<Event> {
-    // TODO(Ivan), step 3a: serde_json::from_str gives a Result; turn it into an Option.
     serde_json::from_str(line).ok()
 }
 

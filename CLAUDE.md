@@ -61,8 +61,10 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
   Always `-u dev`: without it the command runs as root and leaves root-owned files in the cargo
   build volume, which then breaks `cargo` for Ivan (happened Nov 16; fix: `chown -R dev:dev
   /home/dev/.cargo-target`).
-- One branch per step (`feat/…`, `fix/…`, `chore/…`, `docs/…`) → pull request → CI green → merge.
-  `main` only takes changes through PRs. Conventional commit messages (`feat:`, `fix:`, `ci:`…).
+- One branch per meaningful change (`feat/…`, `fix/…`, `chore/…`, `docs/…`), with a commit per
+  piece → pull request when the change is useful on its own (e.g. "start a run over HTTP"), not after
+  every piece (Ivan, Nov 18: fewer CI waits) → CI green → merge. `main` only takes changes through
+  PRs. Conventional commit messages (`feat:`, `fix:`, `ci:`…).
 - Rust toolchain pinned in `rust-toolchain.toml`; Rust CI runs `cargo fmt --check`, `cargo clippy`
   (warnings are errors) and `cargo test`.
 

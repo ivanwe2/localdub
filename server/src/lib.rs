@@ -4,6 +4,7 @@
 //! route uses it.
 
 pub mod events;
+pub mod runner;
 pub mod runs;
 
 use std::path::PathBuf;
