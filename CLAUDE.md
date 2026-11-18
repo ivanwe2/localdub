@@ -2,11 +2,13 @@
 
 ## Working with Ivan (read this first)
 
-- Ivan wants to take part in the development, not be handed finished work. Work in small steps:
-  propose the next step, explain what it does and why, and let him write the code where he wants to
-  learn (the Rust server above all, also the React UI). Review his code; write code yourself only
-  when he asks, and keep it to the step at hand.
-- Ivan makes the commits. Don't commit or push unless he asks.
+- Since Nov 19, 2026 Claude writes the code (Ivan: the learning pace was too slow; he wants the
+  project finished so he can start a new one). Explain briefly what each part does and how Rust does
+  it (Ivan knows .NET; label C# comparisons as C#), but don't leave gaps for him to fill. Until Nov 19
+  he wrote the server's first steps himself (health, runs list, events, runner, job).
+- Since Nov 19 Claude also commits, pushes, opens the PRs and merges them once CI is green, without
+  waiting for Ivan's review (his call: "no need to wait for my reviews"). Still: never merge red CI,
+  never force-push `main`, and tell him what was merged.
 - When he has to run something, say exactly which command and where: laptop PowerShell, CT 103
   (`root@llama-cpp`), or the Proxmox host. One step at a time; wait for the output.
 - Explain as the work goes, briefly: what each part does and how it fits. No big lectures up front.
@@ -133,3 +135,7 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
   unauthenticated call after a health check logs `unauthorized: Invalid API Key` (harmless).
 - The voice stage didn't get faster with Nemotron kept loaded (108 s → 105 s): the per-round reload
   wasn't the bottleneck; TTS (~30 s per round) and the checks are.
+- Server security (Nov 19): POST /runs validates name/channel (safe folder names, no leading `-`)
+  and requires `video` to be an existing file; the server listens on 127.0.0.1 unless
+  LOCALDUB_LISTEN says otherwise. Before opening it to the LAN: token auth; once uploads exist,
+  restrict `video` to the uploads folder instead of any readable file.

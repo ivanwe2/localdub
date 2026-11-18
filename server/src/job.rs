@@ -58,14 +58,27 @@ impl Job {
                 self.stages = stages;
                 self.done = done;
             }
-            Event::Stage { stage, status: StageStatus::Started | StageStatus::Waiting, .. } => {
+            Event::Stage {
+                stage,
+                status: StageStatus::Started | StageStatus::Waiting,
+                ..
+            } => {
                 self.current = Some(stage);
-            },
-            Event::Stage { stage, status: StageStatus::Done, .. } => {
+            }
+            Event::Stage {
+                stage,
+                status: StageStatus::Done,
+                ..
+            } => {
                 self.done.push(stage);
                 self.current = None;
-            },  
-            Event::Result { status, waiting_for, error, .. } => {
+            }
+            Event::Result {
+                status,
+                waiting_for,
+                error,
+                ..
+            } => {
                 self.state = match status {
                     ResultStatus::Done => JobState::Done,
                     ResultStatus::Waiting => JobState::Waiting,
@@ -76,6 +89,12 @@ impl Job {
             }
             Event::Other => {}
         };
+    }
+
+    /// The job failed for a reason outside the engine's own report, e.g. it couldn't be started.
+    pub fn fail(&mut self, error: String) {
+        self.state = JobState::Failed;
+        self.error = Some(error);
     }
 
     /// The engine has exited. If it never sent a result (e.g. it crashed), the job failed.
