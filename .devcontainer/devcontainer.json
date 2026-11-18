@@ -19,7 +19,10 @@
   "customizations": {
     "vscode": {
       "extensions": ["rust-lang.rust-analyzer", "ms-python.python", "tamasfe.even-better-toml"],
-      "settings": { "python.defaultInterpreterPath": "/home/dev/.venv/bin/python" }
+      "settings": {
+        "python.defaultInterpreterPath": "/home/dev/.venv/bin/python",
+        "[rust]": { "editor.formatOnSave": true }
+      }
     }
   }
 }
