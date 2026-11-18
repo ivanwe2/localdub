@@ -12,8 +12,9 @@ localdub run video.mp4 --channel mychannel --no-review --shorts 3
 ```
 
 It is a command-line tool on purpose: a person, a script or an AI agent can drive it the same way
-(exit codes: 0 done, 3 waiting for a human, 1 error). A web UI (Rust server + React) is being built
-on top of the same commands.
+(exit codes: 0 done, 3 waiting for a human, 1 error). There is also a web app on top of the same
+commands (a Rust server and a React page, see [The web app](#the-web-app)): start a run, watch its
+progress live, watch and download the results.
 
 > **Consent.** Only clone the voice of someone who has agreed to it, and only process videos you
 > have the rights to. YouTube lists "cloning one's own voice to create voice overs or dubs" among the
@@ -123,12 +124,38 @@ VENV=~/venvs/demucs-gpu bash ~/localdub/deploy/install.sh     # also: run it aga
 localdub check
 ```
 
+## The web app
+
+`server/` is a Rust server (axum) that runs `localdub ... --json` for you, one run at a time, and
+`web/` is the page it serves. Run it on the machine where localdub runs, so both see the same files:
+
+```
+cd web && npm ci && npm run build && cd ..          # the page, into web/dist
+cd server && cargo build --release && cd ..
+server/target/release/localdub-server               # http://127.0.0.1:8080
+```
+
+| Setting | Default | |
+|---|---|---|
+| `LOCALDUB_HOME` | `~/dub` | channels and runs, the same folder the engine uses |
+| `LOCALDUB_ENGINE` | `localdub` | the engine's command |
+| `LOCALDUB_LISTEN` | `127.0.0.1:8080` | there is no login yet: open it to the network (`0.0.0.0:8080`) only on a trusted LAN |
+| `LOCALDUB_ALLOWED_HOSTS` | | other names the browser uses to reach it, e.g. `192.168.0.71:8080` |
+| `LOCALDUB_WEB` | `web/dist` | the built page |
+
+The API: `GET /api/runs` (every run and its files), `POST /api/runs` (start one: `video`, `channel`,
+`name`, optional `no_review`, `shorts`), `GET /api/job` and `GET /api/job/events` (the current run,
+live as Server-Sent Events), `GET /files/<run>/<path>` (a run's files).
+
 ## Development
 
 ```
 pip install -e ".[dev]"
 python -m pytest -q -m "not slow"     # unit tests, seconds
 python -m pytest -q                   # plus two whole runs against fake model servers, ~2 min
+cd server && cargo test               # the server, against a fake engine script
+cd web && npm test                    # the page's helpers
+cd web && npm run dev                 # the page with instant reload, using the server on :8080
 ```
 
 The end-to-end tests run the real pipeline against stand-ins (`tests/fakes/`): a fake llama-swap

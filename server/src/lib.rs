@@ -22,6 +22,7 @@ use axum::{Json, Router};
 use tokio::sync::watch;
 use tokio_stream::wrappers::WatchStream;
 use tokio_stream::{Stream, StreamExt};
+use tower_http::services::{ServeDir, ServeFile};
 
 use crate::job::{Job, JobState};
 use crate::start::{StartRequest, engine_args};
@@ -41,8 +42,10 @@ pub struct AppState {
     /// The engine's command: the program and any arguments that come before ours, e.g. ["localdub"].
     pub engine: Arc<Vec<String>>,
     /// The current (or last) job. A watch channel holds one value and tells every subscriber when
-    /// it changes; that is what the live progress stream (GET /job/events) listens to.
+    /// it changes; that is what the live progress stream (GET /api/job/events) listens to.
     pub job: Arc<watch::Sender<Option<Job>>>,
+    /// The built web UI (web/dist), served at `/`; None serves the API only.
+    pub web: Option<PathBuf>,
 }
 
 impl AppState {
@@ -51,7 +54,14 @@ impl AppState {
             home,
             engine: Arc::new(engine),
             job: Arc::new(watch::Sender::new(None)),
+            web: None,
         }
+    }
+
+    /// Also serve the web UI from this folder.
+    pub fn with_web(mut self, dir: PathBuf) -> AppState {
+        self.web = Some(dir);
+        self
     }
 }
 
@@ -62,7 +72,7 @@ async fn health() -> Json<Health> {
     })
 }
 
-/// GET /runs: every run on disk, newest first.
+/// GET /api/runs: every run on disk, newest first.
 async fn get_runs(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<runs::RunSummary>>, (StatusCode, String)> {
@@ -73,7 +83,7 @@ async fn get_runs(
     Ok(Json(list))
 }
 
-/// POST /runs: starts the engine for this run in the background and answers at once
+/// POST /api/runs: starts the engine for this run in the background and answers at once
 /// (202 Accepted) with the new job. One run at a time: while one is running, 409 Conflict.
 async fn start_run(
     State(state): State<AppState>,
@@ -131,13 +141,13 @@ async fn start_run(
     Ok((StatusCode::ACCEPTED, Json(job)))
 }
 
-/// GET /job: the current (or last) job; null if nothing has run since the server started.
+/// GET /api/job: the current (or last) job; null if nothing has run since the server started.
 async fn get_job(State(state): State<AppState>) -> Json<Option<Job>> {
     Json(state.job.borrow().clone())
 }
 
-/// GET /job/events: the job as Server-Sent Events, its state right away and again every time it
-/// changes, for as long as the browser stays connected (`new EventSource("/job/events")`).
+/// GET /api/job/events: the job as Server-Sent Events, its state right away and again every time it
+/// changes, for as long as the browser stays connected (`new EventSource("/api/job/events")`).
 async fn job_events(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<sse::Event, axum::Error>>> {
@@ -146,13 +156,25 @@ async fn job_events(
     Sse::new(updates).keep_alive(KeepAlive::default())
 }
 
+/// The whole server:
+/// - `/api/...` the JSON API (health, runs, the job and its live events)
+/// - `/files/<run>/<path>` a run's files, e.g. the dubbed video (ServeDir also answers range
+///   requests, so the browser can seek in a video, and never serves anything outside runs/)
+/// - everything else: the web UI, with index.html for any path it doesn't have
 pub fn app(state: AppState) -> Router {
-    Router::new()
+    let api = Router::new()
         .route("/health", get(health))
         .route("/runs", get(get_runs).post(start_run))
         .route("/job", get(get_job))
-        .route("/job/events", get(job_events))
-        .with_state(state)
+        .route("/job/events", get(job_events));
+    let mut router = Router::new()
+        .nest("/api", api)
+        .nest_service("/files", ServeDir::new(state.home.join("runs")));
+    if let Some(web) = &state.web {
+        let index = ServeFile::new(web.join("index.html"));
+        router = router.fallback_service(ServeDir::new(web).fallback(index));
+    }
+    router.with_state(state)
 }
 
 /// The Host header values the server answers to when it listens on `listen` (e.g.
@@ -255,13 +277,85 @@ mod tests {
     /// Asks for the job until it isn't running any more (the fake engine needs milliseconds).
     async fn job_when_settled(state: &AppState) -> Value {
         for _ in 0..250 {
-            let (_, job) = get_json(app(state.clone()), "/job").await;
+            let (_, job) = get_json(app(state.clone()), "/api/job").await;
             if job["state"] != "running" {
                 return job;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         panic!("the job was still running after 5 s");
+    }
+
+    /// GET `path` (with any extra headers) and return the status and the body as text.
+    async fn get_text(app: Router, path: &str, headers: &[(&str, &str)]) -> (StatusCode, String) {
+        let mut request = Request::get(path);
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let response = app
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    #[tokio::test]
+    async fn a_runs_files_are_served_also_in_ranges() {
+        let home = tempfile::tempdir().unwrap();
+        let run = home.path().join("runs").join("market");
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(
+            run.join("market.en.srt"),
+            "1\n00:00:00,000 --> 00:00:01,000\nHi\n",
+        )
+        .unwrap();
+        let app = app(test_state(home.path()));
+
+        let (status, text) = get_text(app.clone(), "/files/market/market.en.srt", &[]).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(text.ends_with("Hi\n"));
+
+        // what a video player asks for when you seek
+        let (status, text) = get_text(
+            app,
+            "/files/market/market.en.srt",
+            &[("range", "bytes=0-0")],
+        )
+        .await;
+        assert_eq!(status, StatusCode::PARTIAL_CONTENT);
+        assert_eq!(text, "1");
+    }
+
+    #[tokio::test]
+    async fn nothing_outside_the_runs_folder_is_served() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join("runs")).unwrap();
+        std::fs::write(home.path().join("secret.txt"), "not for the browser").unwrap();
+
+        for path in ["/files/../secret.txt", "/files/%2e%2e/secret.txt"] {
+            let (status, text) = get_text(app(test_state(home.path())), path, &[]).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+            assert!(!text.contains("not for the browser"), "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_web_ui_is_served_at_the_root_and_for_its_own_pages() {
+        let home = tempfile::tempdir().unwrap();
+        let web = tempfile::tempdir().unwrap();
+        std::fs::write(web.path().join("index.html"), "<h1>localdub</h1>").unwrap();
+        let state = test_state(home.path()).with_web(web.path().to_path_buf());
+
+        for path in ["/", "/runs/market"] {
+            let (status, text) = get_text(app(state.clone()), path, &[]).await;
+            assert_eq!(status, StatusCode::OK, "{path}");
+            assert!(text.contains("localdub"), "{path}");
+        }
+        let (status, json) = get_json(app(state), "/api/health").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["ok"], true, "the API still answers under /api");
     }
 
     #[test]
@@ -280,7 +374,7 @@ mod tests {
             app(test_state(home.path())),
             default_hosts("127.0.0.1:8080"),
         );
-        let mut request = Request::get("/health");
+        let mut request = Request::get("/api/health");
         if let Some(host) = host {
             request = request.header("host", host);
         }
@@ -328,7 +422,7 @@ mod tests {
         )
         .unwrap();
 
-        let (status, json) = get_json(app(test_state(home.path())), "/runs").await;
+        let (status, json) = get_json(app(test_state(home.path())), "/api/runs").await;
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(json[0]["name"], "market");
@@ -345,7 +439,7 @@ mod tests {
         )
         .unwrap();
 
-        let (status, _) = get_json(app(test_state(home.path())), "/runs").await;
+        let (status, _) = get_json(app(test_state(home.path())), "/api/runs").await;
 
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
     }
@@ -354,7 +448,7 @@ mod tests {
     async fn there_is_no_job_before_the_first_run() {
         let home = tempfile::tempdir().unwrap();
 
-        let (status, job) = get_json(app(test_state(home.path())), "/job").await;
+        let (status, job) = get_json(app(test_state(home.path())), "/api/job").await;
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(job, Value::Null);
@@ -365,8 +459,12 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let state = test_state(home.path());
 
-        let (status, job) =
-            post_json(app(state.clone()), "/runs", start_body(&state, "done-run")).await;
+        let (status, job) = post_json(
+            app(state.clone()),
+            "/api/runs",
+            start_body(&state, "done-run"),
+        )
+        .await;
 
         assert_eq!(status, StatusCode::ACCEPTED);
         assert_eq!(job["run"], "done-run");
@@ -384,7 +482,7 @@ mod tests {
 
         post_json(
             app(state.clone()),
-            "/runs",
+            "/api/runs",
             start_body(&state, "review-run"),
         )
         .await;
@@ -401,7 +499,7 @@ mod tests {
 
         post_json(
             app(state.clone()),
-            "/runs",
+            "/api/runs",
             start_body(&state, "failing-run"),
         )
         .await;
@@ -416,10 +514,18 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let state = test_state(home.path());
 
-        let (first, _) =
-            post_json(app(state.clone()), "/runs", start_body(&state, "slow-run")).await;
-        let (second, _) =
-            post_json(app(state.clone()), "/runs", start_body(&state, "done-run")).await;
+        let (first, _) = post_json(
+            app(state.clone()),
+            "/api/runs",
+            start_body(&state, "slow-run"),
+        )
+        .await;
+        let (second, _) = post_json(
+            app(state.clone()),
+            "/api/runs",
+            start_body(&state, "done-run"),
+        )
+        .await;
 
         assert_eq!(first, StatusCode::ACCEPTED);
         assert_eq!(second, StatusCode::CONFLICT);
@@ -433,7 +539,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let body = json!({"video": "done-run", "channel": "c"});
 
-        let (status, _) = post_json(app(test_state(home.path())), "/runs", body).await;
+        let (status, _) = post_json(app(test_state(home.path())), "/api/runs", body).await;
 
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     }
@@ -447,7 +553,7 @@ mod tests {
 
         let (status, message) = send(
             app(state.clone()),
-            Request::post("/runs")
+            Request::post("/api/runs")
                 .header("content-type", "application/json")
                 .body(Body::from(body.to_string()))
                 .unwrap(),
@@ -456,7 +562,7 @@ mod tests {
 
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(message, Value::Null, "the reason comes back as plain text");
-        let (_, job) = get_json(app(state), "/job").await;
+        let (_, job) = get_json(app(state), "/api/job").await;
         assert_eq!(job, Value::Null, "no job was started");
     }
 
@@ -465,7 +571,12 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let state = AppState::new(home.path().to_path_buf(), vec!["/no/such/localdub".into()]);
 
-        post_json(app(state.clone()), "/runs", start_body(&state, "done-run")).await;
+        post_json(
+            app(state.clone()),
+            "/api/runs",
+            start_body(&state, "done-run"),
+        )
+        .await;
 
         let job = job_when_settled(&state).await;
         assert_eq!(job["state"], "failed");
@@ -481,14 +592,14 @@ mod tests {
     async fn job_events_streams_the_job_as_it_changes() {
         let home = tempfile::tempdir().unwrap();
         let state = test_state(home.path());
-        let request = Request::get("/job/events").body(Body::empty()).unwrap();
+        let request = Request::get("/api/job/events").body(Body::empty()).unwrap();
         let response = app(state.clone()).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()["content-type"], "text/event-stream");
 
         post_json(
             app(state.clone()),
-            "/runs",
+            "/api/runs",
             start_body(&state, "review-run"),
         )
         .await;
