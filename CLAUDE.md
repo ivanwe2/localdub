@@ -57,7 +57,10 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 ## Workflow
 
 - Develop inside the dev container (`.devcontainer/`, VS Code "Reopen in Container"); keep the laptop
-  clean. From outside VS Code: `docker exec -w /workspaces/localdub localdub-dev <command>`.
+  clean. From outside VS Code: `docker exec -u dev -w /workspaces/localdub localdub-dev <command>`.
+  Always `-u dev`: without it the command runs as root and leaves root-owned files in the cargo
+  build volume, which then breaks `cargo` for Ivan (happened Nov 16; fix: `chown -R dev:dev
+  /home/dev/.cargo-target`).
 - One branch per step (`feat/…`, `fix/…`, `chore/…`, `docs/…`) → pull request → CI green → merge.
   `main` only takes changes through PRs. Conventional commit messages (`feat:`, `fix:`, `ci:`…).
 - Rust toolchain pinned in `rust-toolchain.toml`; Rust CI runs `cargo fmt --check`, `cargo clippy`
