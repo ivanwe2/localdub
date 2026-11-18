@@ -41,6 +41,8 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 | `tests/` | unit tests; `test_e2e.py` runs whole videos against `tests/fakes/` (fake llama-swap + the real Demucs wrapper; one run http, one local) |
 | `deploy/install.sh` | install/update on CT 103 from git into the Demucs venv |
 | `deploy/gpu/` | the GPU box: `llama-swap.yaml` (models + groups), `demucs_server.py` (Demucs over HTTP), `llama-swap.service` |
+| `server/src/` | Rust server: `lib.rs` (routes: `/api/…`, `/files/…`, the page), `runs.rs` (runs on disk), `events.rs` (engine `--json` lines), `runner.rs` (runs the engine), `job.rs` (the current run), `start.rs` (POST /api/runs: validation, engine args), `main.rs` (env settings); `testdata/fake-localdub.sh` |
+| `web/` | React + TypeScript page (Vite): `src/api.ts` (API types/client), `src/App.tsx` (job panel, new-run form, runs list), `src/format.ts` (+ tests) |
 
 ## Conventions
 
@@ -105,10 +107,12 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 3. Engine 0.7.0: talks to llama-swap only (router support dropped); `nemo.backend` /
    `demucs.backend` = `http` (default) | `local`. CT 103 switched to llama-swap Nov 12; first full
    run with Shorts worked (8.3 min, Ivan: Shorts "perfect").
-4. Server, one PR at a time: `/health` → list runs (serde) → job queue running the engine →
-   progress streaming → reviews and Shorts endpoints → router model management → token auth → serve the UI.
-5. Web UI on top of the server.
-6. App image (multi-stage) + docker compose; GPU-side services on CT 103.
+4. Server: done so far: health, runs list with files, POST /api/runs (validated, one at a time),
+   job + SSE progress, /files, serves the page, host allowlist. First page (`web/`): job panel,
+   new-run form (video path on the server), runs list with Watch/Download. Next: try it for real
+   on CT 103; then video upload, continuing a run after a review, reviews and Shorts picking in the
+   browser, model status (llama-swap /running), token auth.
+5. App image (multi-stage) + docker compose; GPU-side services on CT 103.
 
 ## Backlog
 
