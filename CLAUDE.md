@@ -137,5 +137,6 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
   wasn't the bottleneck; TTS (~30 s per round) and the checks are.
 - Server security (Nov 19): POST /runs validates name/channel (safe folder names, no leading `-`)
   and requires `video` to be an existing file; the server listens on 127.0.0.1 unless
-  LOCALDUB_LISTEN says otherwise. Before opening it to the LAN: token auth; once uploads exist,
-  restrict `video` to the uploads folder instead of any readable file.
+  LOCALDUB_LISTEN says otherwise, and answers only to its own Host names (DNS-rebinding guard;
+  more via LOCALDUB_ALLOWED_HOSTS; a Vite dev proxy needs `changeOrigin: true`). Before opening it
+  to the LAN: token auth; once uploads exist, restrict `video` to the uploads folder.

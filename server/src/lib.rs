@@ -12,8 +12,10 @@ pub mod start;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::State;
-use axum::http::StatusCode;
+use axum::extract::{Request, State};
+use axum::http::{StatusCode, header};
+use axum::middleware::{self, Next};
+use axum::response::IntoResponse;
 use axum::response::sse::{self, KeepAlive, Sse};
 use axum::routing::get;
 use axum::{Json, Router};
@@ -153,6 +155,48 @@ pub fn app(state: AppState) -> Router {
         .with_state(state)
 }
 
+/// The Host header values the server answers to when it listens on `listen` (e.g.
+/// "127.0.0.1:8080"): localhost, 127.0.0.1 and [::1] on that port, and the listen address itself.
+pub fn default_hosts(listen: &str) -> Vec<String> {
+    let port = listen.rsplit(':').next().unwrap_or("8080");
+    let mut hosts = vec![
+        format!("localhost:{port}"),
+        format!("127.0.0.1:{port}"),
+        format!("[::1]:{port}"),
+    ];
+    if !hosts.iter().any(|h| h == listen) {
+        hosts.push(listen.to_string());
+    }
+    hosts
+}
+
+/// Answers only requests addressed to one of `hosts` (the Host header, any letter case). That stops
+/// DNS rebinding: a web page from another site that points its own domain at this machine still
+/// sends its own domain as the Host. Requests without a Host header don't come from a browser and
+/// pass. (Like ASP.NET Core's AllowedHosts / HostFiltering.)
+pub fn allow_hosts(router: Router, hosts: Vec<String>) -> Router {
+    let hosts = Arc::new(hosts);
+    router.layer(middleware::from_fn(move |req: Request, next: Next| {
+        let hosts = hosts.clone();
+        async move {
+            let refused = req
+                .headers()
+                .get(header::HOST)
+                .map(|h| String::from_utf8_lossy(h.as_bytes()).into_owned())
+                .filter(|host| !hosts.iter().any(|h| h.eq_ignore_ascii_case(host)));
+            match refused {
+                Some(host) => {
+                    let msg = format!(
+                        "this server doesn't answer to host {host:?} (see LOCALDUB_ALLOWED_HOSTS)"
+                    );
+                    (StatusCode::FORBIDDEN, msg).into_response()
+                }
+                None => next.run(req).await,
+            }
+        }
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -218,6 +262,51 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         panic!("the job was still running after 5 s");
+    }
+
+    #[test]
+    fn the_default_hosts_are_this_machine_on_the_listen_port() {
+        assert_eq!(
+            default_hosts("127.0.0.1:8080"),
+            ["localhost:8080", "127.0.0.1:8080", "[::1]:8080"]
+        );
+        assert!(default_hosts("0.0.0.0:9000").contains(&"0.0.0.0:9000".to_string()));
+    }
+
+    /// GET /health with this Host header (or none), through the host check.
+    async fn status_with_host(host: Option<&str>) -> StatusCode {
+        let home = tempfile::tempdir().unwrap();
+        let app = allow_hosts(
+            app(test_state(home.path())),
+            default_hosts("127.0.0.1:8080"),
+        );
+        let mut request = Request::get("/health");
+        if let Some(host) = host {
+            request = request.header("host", host);
+        }
+        let response = app.oneshot(request.body(Body::empty()).unwrap()).await;
+        response.unwrap().status()
+    }
+
+    #[tokio::test]
+    async fn requests_addressed_to_another_host_are_refused() {
+        assert_eq!(
+            status_with_host(Some("localhost:8080")).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            status_with_host(Some("LocalHost:8080")).await,
+            StatusCode::OK
+        );
+        assert_eq!(status_with_host(None).await, StatusCode::OK);
+        assert_eq!(
+            status_with_host(Some("evil.example:8080")).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status_with_host(Some("localhost:9999")).await,
+            StatusCode::FORBIDDEN
+        );
     }
 
     #[tokio::test]

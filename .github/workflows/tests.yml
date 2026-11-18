@@ -17,12 +17,14 @@ permissions:
 jobs:
   engine:
     runs-on: ubuntu-latest
+    timeout-minutes: 20   # normally ~2 min; a hang (e.g. a slow package mirror) fails instead of blocking
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: System tools (ffmpeg with libass, hunspell + Bulgarian, caption font)
+        timeout-minutes: 8
         run: sudo apt-get update && sudo apt-get install -y ffmpeg hunspell hunspell-bg fontconfig fonts-dejavu-core
       - run: pip install -e ".[dev]"
       - run: python -m pyflakes src tests deploy
@@ -31,6 +33,7 @@ jobs:
 
   server:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: server
