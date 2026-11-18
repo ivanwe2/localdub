@@ -15,7 +15,7 @@
 //!
 //! Only the fields the server uses are here; serde ignores the rest.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// One line of the engine's output. The JSON field "event" says which case it is
 /// (≈ System.Text.Json's [JsonPolymorphic(TypeDiscriminatorPropertyName = "event")]).
@@ -61,7 +61,7 @@ pub enum ResultStatus {
     Error,
 }
 
-#[derive(Debug, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct WaitingFor {
     pub kind: String,
     pub file: String,

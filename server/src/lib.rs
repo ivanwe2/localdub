@@ -6,6 +6,7 @@
 pub mod events;
 pub mod runner;
 pub mod runs;
+pub mod job;
 
 use std::path::PathBuf;
 
