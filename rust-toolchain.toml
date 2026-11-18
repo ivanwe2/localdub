@@ -3,4 +3,6 @@
 [toolchain]
 channel = "1.99.1"
 components = ["rustfmt", "clippy"]
+# musl: a fully static server binary that runs on any x86-64 Linux (deploy/server/build.sh)
+targets = ["x86_64-unknown-linux-musl"]
 profile = "minimal"
