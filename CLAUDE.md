@@ -113,9 +113,17 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
    (validated, videos inside the home folder only), uploads (streamed, `<home>/videos`), reviews
    (GET/PUT the waited-for file; *Approve and continue* sets `status: approved`), continue (after
    a review/error, or `shorts --lang` for picked Shorts), make Shorts, job + SSE, /files, the page,
-   host + origin guard. Deploy package in `deploy/server/`. **Next: try it for real on CT 103**
-   (Ivan uses CT 103 for gaming at times; test when he says it's free). Later, only if wanted:
-   model status (llama-swap /running), token auth for LAN use (until then: SSH tunnel).
+   host + origin guard. Deploy package in `deploy/server/`. Tested for real on CT 103 Nov 20
+   (whole run with reviews in the page: Ivan "looking great"). Since then: release builds +
+   `deploy/update.sh`; AI panel (engine 0.8.0 `call` events → job.calls; engine stderr → job.log;
+   `/api/status` from llama-swap `/running` + `/metrics`, live every 2 s while watched).
+   **Next, in this order**: voice picker (`localdub voice <run>`: candidates + test clones + scores,
+   pick one for the channel; page: listen and compare), YouTube downloads with yt-dlp (install
+   the self-updating binary on CT 103; server runs it into `<home>/videos`), UI overhaul (mock-up
+   first: dark studio look, animated sound-wave line background that "speaks" while a run works,
+   runs as editing-timeline tracks, timecode numbers, VU-meter tok/s, warm "on air" accent; Ivan
+   liked this concept). Token auth only if LAN use is wanted (until then: SSH tunnel). CT 103 is
+   sometimes used for gaming: ask before running things there.
 5. App image (multi-stage) + docker compose; GPU-side services on CT 103.
 
 ## Backlog

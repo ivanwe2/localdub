@@ -17,6 +17,13 @@ complete event, and the last line is always the result:
 
 The result's status is "done" (exit code 0), "waiting" for a person (3) or "error" (anything
 else, with an "error" message). Facts for the result are collected on the way with note().
+
+Every request to a model (llm.py) also reports a "call" event as it finishes, so a reader can show
+what the AI is doing and how fast:
+  {"event": "call", "kind": "chat", "model": "gemma4-31b", "label": "translating 1-20",
+   "seconds": 24.1, "tokens": 2463, "tok_per_s": 103.2, "prompt_tokens": 1890, "prompt_per_s": 910.4}
+  {"event": "call", "kind": "tts", "model": "qwen3-tts", "label": "voice clone", "seconds": 0.9, "chars": 64}
+  {"event": "call", "kind": "asr", ...}  {"event": "call", "kind": "separation", ...}
 """
 
 from __future__ import annotations

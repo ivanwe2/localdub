@@ -96,7 +96,9 @@ per line, and the last line is always the result:
 
 `status` is `done`, `waiting` (`waiting_for.kind`: `review1`, `review2` or `shorts`) or `error` (with
 `error` and, if a stage failed, `stage`). A finished run's result has `outputs`, `shorts` and `timings`;
-`check --json` sends one `check` event per line it checks. See `src/localdub/events.py`.
+`check --json` sends one `check` event per line it checks. Every request to a model also sends a
+`call` event (`kind`: `chat`, `tts`, `asr` or `separation`, with the model, seconds, and for chat the
+tokens and tokens per second). See `src/localdub/events.py`.
 
 ## Requirements
 
@@ -171,7 +173,8 @@ The API:
 | `POST /api/runs/<run>/continue` | go on after a review or an error, or render the picked Shorts |
 | `POST /api/runs/<run>/shorts` | propose Shorts for a finished run: `{"lang": "dub"}` or `"original"` |
 | `GET /api/videos`, `PUT /api/videos/<file>` | the uploaded videos; upload one (the body is the file) |
-| `GET /api/job`, `GET /api/job/events` | the current run, and live as Server-Sent Events |
+| `GET /api/job`, `GET /api/job/events` | the current run (with its latest model requests and log), and live as Server-Sent Events |
+| `GET /api/status`, `GET /api/status/events` | the models llama-swap has running and each GPU's load, memory, temperature and power, live every 2 s |
 | `GET /files/<run>/<path>` | a run's files |
 
 One run at a time (409 while one is going). The server only answers to its own host names and

@@ -9,9 +9,14 @@
 //!   LOCALDUB_ALLOWED_HOSTS  more names the browser may use to reach it, comma-separated, e.g.
 //!                           "192.168.0.71:8080,llama-cpp:8080" (localhost always works)
 //!   LOCALDUB_WEB            the built web UI (default: web/dist or ../web/dist, if it exists)
+//!   LOCALDUB_MODELS_URL     llama-swap, for the models' and GPUs' status (default
+//!                           http://127.0.0.1:9876; "none" turns the status off)
+//!   LLAMA_API_KEY           its API key (the service reads it from /etc/llama.env)
 
 use std::path::PathBuf;
+use std::time::Duration;
 
+use localdub_server::status::{ModelServer, keep_asking};
 use localdub_server::{AppState, allow_hosts, app, default_hosts};
 
 #[tokio::main]
@@ -51,6 +56,23 @@ async fn main() -> std::io::Result<()> {
     let mut state = AppState::new(home, engine);
     if let Some(dir) = web {
         state = state.with_web(dir);
+    }
+    let models_url = std::env::var("LOCALDUB_MODELS_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:9876".to_string());
+    if models_url != "none" {
+        let key = std::env::var("LLAMA_API_KEY")
+            .ok()
+            .filter(|k| !k.is_empty());
+        let server = ModelServer {
+            url: models_url,
+            key,
+        };
+        tokio::spawn(keep_asking(
+            server.clone(),
+            state.status.clone(),
+            Duration::from_secs(2),
+        ));
+        state = state.with_models(server);
     }
     let app = allow_hosts(app(state), hosts);
     axum::serve(listener, app).await?;

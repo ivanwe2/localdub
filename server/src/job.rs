@@ -3,7 +3,11 @@
 
 use serde::Serialize;
 
-use crate::events::{Event, ResultStatus, StageStatus, WaitingFor};
+use crate::events::{Call, Event, ResultStatus, StageStatus, WaitingFor};
+
+/// How many of the latest model calls and log lines a job keeps for the page.
+pub const KEEP_CALLS: usize = 40;
+pub const KEEP_LOG: usize = 300;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -33,6 +37,10 @@ pub struct Job {
     pub waiting_for: Option<WaitingFor>,
     /// What went wrong, when the job failed.
     pub error: Option<String>,
+    /// The latest requests to the models, oldest first (at most KEEP_CALLS).
+    pub calls: Vec<Call>,
+    /// The engine's latest messages for people (its stderr), oldest first (at most KEEP_LOG).
+    pub log: Vec<String>,
 }
 
 impl Job {
@@ -46,7 +54,14 @@ impl Job {
             current: None,
             waiting_for: None,
             error: None,
+            calls: Vec::new(),
+            log: Vec::new(),
         }
+    }
+
+    /// One line the engine wrote for people.
+    pub fn log_line(&mut self, line: String) {
+        keep_last(&mut self.log, line, KEEP_LOG);
     }
 
     /// Updates the job from one of the engine's events. The tests below say exactly what each
@@ -87,6 +102,7 @@ impl Job {
                 self.waiting_for = waiting_for;
                 self.error = error;
             }
+            Event::Call(call) => keep_last(&mut self.calls, call, KEEP_CALLS),
             Event::Other => {}
         };
     }
@@ -105,6 +121,14 @@ impl Job {
                 "the engine stopped without saying how it ended (exit code {exit_code})"
             ));
         }
+    }
+}
+
+/// Adds `item` to the end of `list`, dropping the oldest items beyond `max`.
+fn keep_last<T>(list: &mut Vec<T>, item: T, max: usize) {
+    list.push(item);
+    if list.len() > max {
+        list.drain(..list.len() - max);
     }
 }
 
@@ -135,6 +159,47 @@ mod tests {
             waiting_for: None,
             error: None,
         }
+    }
+
+    fn chat_call(n: u64) -> Event {
+        Event::Call(Call {
+            kind: "chat".into(),
+            model: "gemma4-31b".into(),
+            label: format!("translating {n}"),
+            seconds: 1.0,
+            tokens: Some(n),
+            tok_per_s: Some(100.0),
+            prompt_tokens: None,
+            prompt_per_s: None,
+            chars: None,
+            audio_seconds: None,
+        })
+    }
+
+    #[test]
+    fn the_job_keeps_the_latest_model_calls_and_log_lines() {
+        let mut job = Job::new("market");
+
+        for n in 0..(KEEP_CALLS as u64 + 5) {
+            job.apply(chat_call(n));
+        }
+        for n in 0..(KEEP_LOG + 7) {
+            job.log_line(format!("line {n}"));
+        }
+
+        assert_eq!(job.calls.len(), KEEP_CALLS);
+        assert_eq!(job.calls[0].tokens, Some(5), "the oldest went first");
+        assert_eq!(
+            job.calls.last().unwrap().tokens,
+            Some(KEEP_CALLS as u64 + 4)
+        );
+        assert_eq!(job.log.len(), KEEP_LOG);
+        assert_eq!(job.log[0], "line 7");
+        assert_eq!(
+            job.state,
+            JobState::Running,
+            "calls and log lines don't change the state"
+        );
     }
 
     #[test]
