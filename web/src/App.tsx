@@ -1,9 +1,11 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 
 import {
+  type Call,
   continueRun,
   fileUrl,
   followJob,
+  followStatus,
   getReview,
   type Job,
   listRuns,
@@ -13,13 +15,16 @@ import {
   type RunSummary,
   saveReview,
   startRun,
+  type Status,
   uploadVideo,
   type Video,
 } from "./api";
 import {
   approve,
   candidates,
+  formatBytes,
   formatSeconds,
+  sparkline,
   progress,
   suggestName,
   toggleCandidate,
@@ -55,6 +60,8 @@ export default function App() {
         <p className="muted">Dub a video into another language in the creator's own voice.</p>
       </header>
       <JobPanel job={job} />
+      <AiPanel calls={job?.calls ?? []} />
+      {job && job.log.length > 0 && <LogPanel lines={job.log} />}
       <NewRun busy={busy} />
       <Runs runs={runs} error={runsError} busy={busy} onChange={refreshRuns} />
     </main>
@@ -97,6 +104,106 @@ function JobPanel({ job }: { job: Job | null }) {
         </p>
       )}
       {job.state === "failed" && <p className="error">{job.error}</p>}
+    </section>
+  );
+}
+
+const KIND: Record<string, string> = {
+  chat: "text",
+  tts: "voice",
+  asr: "transcription",
+  separation: "separation",
+};
+
+/**
+ * What the AI is doing: the models running, each GPU (live from /api/status/events), and the
+ * latest requests of this run with their speed.
+ */
+function AiPanel({ calls }: { calls: Call[] }) {
+  const [status, setStatus] = useState<Status | null>(null);
+  useEffect(() => followStatus(setStatus), []);
+
+  const chats = calls.filter((c) => c.kind === "chat" && c.tok_per_s != null);
+  const last = chats.at(-1);
+  const speeds = chats.slice(-20).map((c) => c.tok_per_s ?? 0);
+  return (
+    <section className="card">
+      <h2>AI</h2>
+      {status?.error && <p className="error">{status.error}</p>}
+      <div className="row">
+        <div className="models">
+          {status && status.models.length === 0 && <p className="muted">No model loaded.</p>}
+          {status?.models.map((m) => (
+            <div key={m.model} className="model">
+              <span className={`badge ${m.state === "ready" ? "done" : "running"}`}>{m.state}</span>{" "}
+              <strong>{m.name || m.model}</strong>
+              {m.description && <div className="muted">{m.description}</div>}
+            </div>
+          ))}
+        </div>
+        {last && (
+          <div className="speed">
+            <div className="big">{last.tok_per_s?.toFixed(0)}</div>
+            <div className="muted">tok/s · {last.model}</div>
+            {speeds.length > 1 && (
+              <svg viewBox="0 0 120 30" width="120" height="30" aria-label="speed of the latest requests">
+                <polyline points={sparkline(speeds, 120, 28)} fill="none" stroke="currentColor" strokeWidth="1.5" />
+              </svg>
+            )}
+          </div>
+        )}
+      </div>
+      <div className="gpus">
+        {status?.gpus.map((g) => {
+          const share = g.memory_total_bytes ? g.memory_used_bytes / g.memory_total_bytes : 0;
+          return (
+            <div key={g.id} className="gpu">
+              <div className="row">
+                <strong>GPU {g.id}</strong>
+                <span className="muted">
+                  {g.util_percent.toFixed(0)}% · {g.temperature_c.toFixed(0)} °C · {g.power_w.toFixed(0)} W
+                </span>
+              </div>
+              <div className="bar" title={`${formatBytes(g.memory_used_bytes)} of ${formatBytes(g.memory_total_bytes)}`}>
+                <div style={{ width: `${share * 100}%` }} />
+              </div>
+              <div className="muted small">
+                {formatBytes(g.memory_used_bytes)} of {formatBytes(g.memory_total_bytes)} memory
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {calls.length > 0 && (
+        <details>
+          <summary>Latest requests ({calls.length})</summary>
+          <table className="calls">
+            <tbody>
+              {[...calls].reverse().map((c, i) => (
+                <tr key={calls.length - i}>
+                  <td>{KIND[c.kind] ?? c.kind}</td>
+                  <td>{c.label}</td>
+                  <td className="muted">{c.model}</td>
+                  <td className="num">{c.seconds.toFixed(1)} s</td>
+                  <td className="num">{c.tok_per_s != null ? `${c.tok_per_s.toFixed(0)} tok/s` : ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
+    </section>
+  );
+}
+
+/** The engine's own messages, the newest at the bottom. */
+function LogPanel({ lines }: { lines: string[] }) {
+  return (
+    <section className="card">
+      <details>
+        <summary>Engine log</summary>
+        <pre className="log">{lines.join("\n")}</pre>
+      </details>
     </section>
   );
 }

@@ -32,6 +32,10 @@ def test_automatic_run_with_shorts(fake_env, capsys):
     assert done == ev[0]["stages"]  # every announced stage finished, in order
     result = ev[-1]
     assert result["event"] == "result" and result["status"] == "done" and result["exit_code"] == 0
+    calls = [e for e in ev if e["event"] == "call"]
+    assert {c["kind"] for c in calls} == {"chat", "tts", "asr", "separation"}  # every kind of model call
+    chat = next(c for c in calls if c["kind"] == "chat")
+    assert chat["model"] == "gemma4-31b" and chat["tok_per_s"] == 100.0 and chat["tokens"] == 100
     assert result["outputs"]["video"].endswith("auto.en.mp4") and set(result["shorts"]) == {"original", "dub"}
     run = fake_env["home"] / "runs" / "auto"
     assert streams(run / "auto.en.mp4") == ["video", "audio", "audio"]

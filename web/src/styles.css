@@ -259,6 +259,72 @@ textarea {
   margin-left: 26px;
 }
 
+.small {
+  font-size: 0.8rem;
+}
+
+.models {
+  flex: 1 1 320px;
+  display: grid;
+  gap: 8px;
+}
+
+.speed {
+  text-align: right;
+  color: var(--accent);
+}
+
+.speed .big {
+  font-size: 2.2rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.gpus {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.gpu .bar {
+  margin: 6px 0 2px;
+}
+
+.calls {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  margin-top: 6px;
+}
+
+.calls td {
+  padding: 3px 6px;
+  border-top: 1px solid var(--line);
+}
+
+.calls .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.log {
+  max-height: 320px;
+  overflow: auto;
+  font-size: 0.8rem;
+  background: var(--bg);
+  padding: 10px;
+  border-radius: 6px;
+  white-space: pre-wrap;
+}
+
+summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+
 .runs {
   list-style: none;
   padding: 0;

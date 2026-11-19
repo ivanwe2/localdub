@@ -23,6 +23,8 @@ import uuid
 import zipfile
 from pathlib import Path
 
+from . import events
+
 CHUNK = 1 << 20  # copy large bodies 1 MB at a time
 
 
@@ -170,9 +172,14 @@ class Server:
         t0 = time.monotonic()
         reply = self._req("POST", "/v1/chat/completions", body)
         took = time.monotonic() - t0
-        tokens = (reply.get("usage") or {}).get("completion_tokens", 0)
-        speed = (reply.get("timings") or {}).get("predicted_per_second", 0.0)
+        usage, timings = reply.get("usage") or {}, reply.get("timings") or {}
+        tokens = usage.get("completion_tokens", 0)
+        speed = timings.get("predicted_per_second", 0.0)
         self.stats.append((label, took, tokens, speed))
+        prompt_speed = timings.get("prompt_per_second")
+        events.emit("call", kind="chat", model=body["model"], label=label, seconds=round(took, 2),
+                    tokens=tokens, tok_per_s=round(speed, 1), prompt_tokens=usage.get("prompt_tokens"),
+                    prompt_per_s=round(prompt_speed, 1) if prompt_speed is not None else None)
         if not quiet:
             print(f"   {label}: {took:.0f}s, {tokens} tokens, {speed:.0f} tok/s", file=sys.stderr)
         choice = reply["choices"][0]
@@ -218,9 +225,12 @@ class Server:
     def tts(self, model: str, text: str, lang: str, ref_b64: str, seed: int) -> bytes:
         """Voice clone: llama.cpp's /tts on that model's own server, through llama-swap's passthrough."""
         body = {"input": text, "lang": lang, "seed": seed, "speaker_ref_b64": ref_b64}
+        t0 = time.monotonic()
         data = self._req("POST", f"/upstream/{model}/tts", body, timeout=900, raw=True)
         if data[:4] != b"RIFF":
             raise LLMError(f"/tts returned no audio for {text!r}: {data[:300]!r}")
+        events.emit("call", kind="tts", model=model, label="voice clone",
+                    seconds=round(time.monotonic() - t0, 2), chars=len(text))
         return data
 
     def transcribe(self, model: str, wav: Path, lang: str) -> dict:
@@ -228,16 +238,20 @@ class Server:
         fields = [("model", model), ("language", lang), ("response_format", "verbose_json"),
                   ("timestamp_granularities[]", "word")]
         body, ctype = multipart(fields, "file", wav.name, wav.read_bytes())
+        t0 = time.monotonic()
         with self._open("POST", "/v1/audio/transcriptions", body, {"Content-Type": ctype}) as r:
             got = json.loads(r.read())
         if "words" not in got:
             raise LLMError(f"transcription of {wav.name} returned no words: {str(got)[:300]}")
+        events.emit("call", kind="asr", model=model, label=f"transcribe {wav.name}",
+                    seconds=round(time.monotonic() - t0, 2), audio_seconds=got.get("duration"))
         return got
 
     def separate(self, model: str, audio: Path, vocals: Path, music: Path) -> None:
         """Split `audio` into his voice and everything else (deploy/gpu/demucs_server.py behind llama-swap).
         The answer is a ZIP with vocals.wav and no_vocals.wav; both directions are streamed to disk."""
         headers = {"Content-Type": "audio/wav", "Content-Length": str(audio.stat().st_size)}
+        t0 = time.monotonic()
         with tempfile.TemporaryFile() as z:
             # the read timeout must outlast the separation itself: nothing comes back until it's done
             with audio.open("rb") as f, self._open("POST", f"/upstream/{model}/separate", f, headers, 7200) as r:
@@ -249,3 +263,5 @@ class Server:
                             shutil.copyfileobj(src, out, CHUNK)
             except (zipfile.BadZipFile, KeyError) as e:
                 raise LLMError(f"separation returned no stems ({e})") from None
+        events.emit("call", kind="separation", model=model, label="split voice and music",
+                    seconds=round(time.monotonic() - t0, 2))

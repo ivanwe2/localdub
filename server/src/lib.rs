@@ -8,6 +8,7 @@ pub mod job;
 pub mod runner;
 pub mod runs;
 pub mod start;
+pub mod status;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,6 +31,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use crate::job::{Job, JobState};
 use crate::runs::{RunSummary, Waiting};
 use crate::start::{ShortsRequest, StartRequest};
+use crate::status::{ModelServer, Status};
 
 /// An error answer: a status code and a plain-text reason the page can show as it is.
 type Failure = (StatusCode, String);
@@ -57,6 +59,13 @@ pub struct AppState {
     pub job: Arc<watch::Sender<Option<Job>>>,
     /// The built web UI (web/dist), served at `/`; None serves the API only.
     pub web: Option<PathBuf>,
+    /// Where the models are (llama-swap), for the status panel; None: no status.
+    pub models: Option<ModelServer>,
+    /// The latest status of the models and GPUs; status::keep_asking refreshes it while the page
+    /// watches (GET /api/status/events).
+    pub status: Arc<watch::Sender<Status>>,
+    /// For asking the model server (it keeps its connections open between requests).
+    pub client: reqwest::Client,
 }
 
 impl AppState {
@@ -66,7 +75,16 @@ impl AppState {
             engine: Arc::new(engine),
             job: Arc::new(watch::Sender::new(None)),
             web: None,
+            models: None,
+            status: Arc::new(watch::Sender::new(Status::default())),
+            client: reqwest::Client::new(),
         }
+    }
+
+    /// Also show the models' status, from this llama-swap.
+    pub fn with_models(mut self, server: ModelServer) -> AppState {
+        self.models = Some(server);
+        self
     }
 
     /// Also serve the web UI from this folder.
@@ -120,13 +138,24 @@ fn launch(state: &AppState, run: &str, args: Vec<String>) -> Result<Job, Failure
     all_args.extend(args);
     let job = state.job.clone();
     tokio::spawn(async move {
-        let outcome = runner::run_engine(&program, &all_args, |event| {
-            job.send_modify(|current| {
-                if let Some(job) = current {
-                    job.apply(event);
-                }
-            });
-        })
+        let outcome = runner::run_engine(
+            &program,
+            &all_args,
+            |event| {
+                job.send_modify(|current| {
+                    if let Some(job) = current {
+                        job.apply(event);
+                    }
+                })
+            },
+            |line| {
+                job.send_modify(|current| {
+                    if let Some(job) = current {
+                        job.log_line(line);
+                    }
+                })
+            },
+        )
         .await;
         job.send_modify(|current| {
             if let Some(job) = current {
@@ -348,6 +377,35 @@ async fn upload_video(
     Ok((StatusCode::CREATED, Json(video)))
 }
 
+/// GET /api/status: the models and GPUs right now (asked on the spot).
+async fn get_status(State(state): State<AppState>) -> Json<Status> {
+    match &state.models {
+        Some(server) => Json(status::ask(&state.client, server).await),
+        None => Json(Status {
+            error: Some("no model server configured (LOCALDUB_MODELS_URL)".to_string()),
+            ..Status::default()
+        }),
+    }
+}
+
+/// GET /api/status/events: the models and GPUs as Server-Sent Events, every couple of seconds
+/// while the page is open. Subscribing is what makes the server ask (status::keep_asking).
+async fn status_events(
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = Result<sse::Event, axum::Error>>> {
+    // ask right away, so the page's first message is fresh, not the empty start value
+    let never_asked = state.status.borrow().at_ms == 0; // the read lock ends with this line
+    if let Some(server) = &state.models
+        && never_asked
+    {
+        let fresh = status::ask(&state.client, server).await;
+        state.status.send_replace(fresh);
+    }
+    let updates = WatchStream::new(state.status.subscribe())
+        .map(|status| sse::Event::default().json_data(status));
+    Sse::new(updates).keep_alive(KeepAlive::default())
+}
+
 /// GET /api/job: the current (or last) job; null if nothing has run since the server started.
 async fn get_job(State(state): State<AppState>) -> Json<Option<Job>> {
     Json(state.job.borrow().clone())
@@ -364,7 +422,8 @@ async fn job_events(
 }
 
 /// The whole server:
-/// - `/api/...` the JSON API: health, runs (start, continue, review, Shorts), uploads, the job
+/// - `/api/...` the JSON API: health, runs (start, continue, review, Shorts), uploads, the job,
+///   the models' and GPUs' status
 /// - `/files/<run>/<path>` a run's files, e.g. the dubbed video (ServeDir also answers range
 ///   requests, so the browser can seek in a video, and never serves anything outside runs/)
 /// - everything else: the web UI, with index.html for any path it doesn't have
@@ -381,7 +440,9 @@ pub fn app(state: AppState) -> Router {
             put(upload_video).layer(DefaultBodyLimit::disable()), // videos are big
         )
         .route("/job", get(get_job))
-        .route("/job/events", get(job_events));
+        .route("/job/events", get(job_events))
+        .route("/status", get(get_status))
+        .route("/status/events", get(status_events));
     let mut router = Router::new()
         .nest("/api", api)
         .nest_service("/files", ServeDir::new(state.home.join("runs")));

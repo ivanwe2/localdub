@@ -11,6 +11,26 @@ export function formatSeconds(seconds: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${m}:${s}`;
 }
 
+/** 14_971_568_128 → "15.0 GB" (decimal gigabytes, like the drives and cards say). */
+export function formatBytes(bytes: number): string {
+  if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6) return `${(bytes / 1e6).toFixed(0)} MB`;
+  return `${Math.round(bytes / 1e3)} kB`;
+}
+
+/**
+ * The points of a little line chart (an SVG polyline) for these values, in a `width` × `height`
+ * box: the oldest on the left, the largest at the top. [] for fewer than two values.
+ */
+export function sparkline(values: number[], width: number, height: number): string {
+  if (values.length < 2) return "";
+  const top = Math.max(...values) || 1;
+  const step = width / (values.length - 1);
+  return values
+    .map((v, i) => `${(i * step).toFixed(1)},${(height - (v / top) * height).toFixed(1)}`)
+    .join(" ");
+}
+
 /** How far the job is, 0 to 1: the finished share of its stages. */
 export function progress(job: Job): number {
   if (job.state === "done") return 1;

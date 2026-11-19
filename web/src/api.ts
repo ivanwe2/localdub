@@ -7,6 +7,20 @@ export interface WaitingFor {
   file: string;
 }
 
+/** One request to a model: text ("chat"), voice clone ("tts"), transcription ("asr"), separation. */
+export interface Call {
+  kind: string;
+  model: string;
+  label: string;
+  seconds: number;
+  tokens: number | null;
+  tok_per_s: number | null;
+  prompt_tokens: number | null;
+  prompt_per_s: number | null;
+  chars: number | null;
+  audio_seconds: number | null;
+}
+
 /** The one run the server is working on, or did last (server/src/job.rs). */
 export interface Job {
   run: string;
@@ -16,6 +30,35 @@ export interface Job {
   current: string | null;
   waiting_for: WaitingFor | null;
   error: string | null;
+  calls: Call[]; // the latest model requests, oldest first
+  log: string[]; // the engine's latest messages, oldest first
+}
+
+/** A model llama-swap has running. */
+export interface RunningModel {
+  model: string;
+  state: string; // "starting", "ready", "stopping"
+  name: string;
+  description: string;
+}
+
+export interface Gpu {
+  id: string;
+  name: string;
+  util_percent: number;
+  memory_used_bytes: number;
+  memory_total_bytes: number;
+  temperature_c: number;
+  power_w: number;
+}
+
+/** The models and GPUs right now (server/src/status.rs). */
+export interface Status {
+  models: RunningModel[];
+  gpus: Gpu[];
+  memory: { used_bytes: number; total_bytes: number } | null;
+  error: string | null;
+  at_ms: number;
 }
 
 /** A run's results, as paths relative to its folder (served from /files/<run>/<path>). */
@@ -160,8 +203,17 @@ export function uploadVideo(file: File, name: string, onProgress: (share: number
 
 /** Calls `onJob` with the job now and every time it changes; returns a function that stops. */
 export function followJob(onJob: (job: Job | null) => void): () => void {
-  const events = new EventSource("/api/job/events");
-  events.onmessage = (event) => onJob(JSON.parse(event.data));
+  return follow("/api/job/events", onJob);
+}
+
+/** Calls `onStatus` with the models' and GPUs' status every couple of seconds; returns a stop function. */
+export function followStatus(onStatus: (status: Status) => void): () => void {
+  return follow("/api/status/events", onStatus);
+}
+
+function follow<T>(path: string, onValue: (value: T) => void): () => void {
+  const events = new EventSource(path); // reconnects by itself if the connection drops
+  events.onmessage = (event) => onValue(JSON.parse(event.data));
   return () => events.close();
 }
 

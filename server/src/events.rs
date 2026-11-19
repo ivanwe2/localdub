@@ -18,10 +18,12 @@
 use serde::{Deserialize, Serialize};
 
 /// One line of the engine's output. The JSON field "event" says which case it is
-/// (≈ System.Text.Json's [JsonPolymorphic(TypeDiscriminatorPropertyName = "event")]).
+/// (like System.Text.Json's [JsonPolymorphic(TypeDiscriminatorPropertyName = "event")]).
 #[derive(Debug, PartialEq, Deserialize)]
 #[serde(tag = "event", rename_all = "lowercase")]
 pub enum Event {
+    /// A request to a model finished: what, by which model, how long, how fast.
+    Call(Call),
     /// The command started: the run's name, all its stages, and the ones done in an earlier attempt.
     Start {
         run: String,
@@ -67,6 +69,27 @@ pub struct WaitingFor {
     pub file: String,
 }
 
+/// One request to a model (src/localdub/llm.py): text ("chat"), voice clone ("tts"), transcription
+/// ("asr") or voice/music separation ("separation"). The token counts and speeds are the model
+/// server's own numbers, for chat only.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct Call {
+    pub kind: String,
+    pub model: String,
+    pub label: String,
+    pub seconds: f64,
+    /// Generated tokens, and how fast they came.
+    pub tokens: Option<u64>,
+    pub tok_per_s: Option<f64>,
+    /// The prompt's tokens, and how fast the model read them.
+    pub prompt_tokens: Option<u64>,
+    pub prompt_per_s: Option<f64>,
+    /// For a voice clone: the characters spoken.
+    pub chars: Option<u64>,
+    /// For a transcription: the audio's length.
+    pub audio_seconds: Option<f64>,
+}
+
 /// One line of the engine's output as an event; None if the line isn't one (not JSON, or no
 /// "event" field).
 pub fn parse_line(line: &str) -> Option<Event> {
@@ -76,6 +99,32 @@ pub fn parse_line(line: &str) -> Option<Event> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_model_call() {
+        let line = r#"{"event": "call", "kind": "chat", "model": "gemma4-31b", "label": "translating 1-20",
+                       "seconds": 24.1, "tokens": 2463, "tok_per_s": 103.2, "prompt_tokens": 1890,
+                       "prompt_per_s": 910.4}"#;
+        let tts = r#"{"event": "call", "kind": "tts", "model": "qwen3-tts", "label": "voice clone",
+                      "seconds": 0.9, "chars": 64}"#;
+
+        let Some(Event::Call(chat)) = parse_line(line) else {
+            panic!("not a call: {line}")
+        };
+        let Some(Event::Call(tts)) = parse_line(tts) else {
+            panic!("not a call: {tts}")
+        };
+
+        assert_eq!(
+            (chat.model.as_str(), chat.tok_per_s),
+            ("gemma4-31b", Some(103.2))
+        );
+        assert_eq!(chat.prompt_tokens, Some(1890));
+        assert_eq!(
+            (tts.kind.as_str(), tts.chars, tts.tokens),
+            ("tts", Some(64), None)
+        );
+    }
 
     #[test]
     fn start() {

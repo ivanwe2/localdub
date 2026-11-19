@@ -4,7 +4,9 @@ import { fileUrl, type Job } from "./api";
 import {
   approve,
   candidates,
+  formatBytes,
   formatSeconds,
+  sparkline,
   progress,
   suggestName,
   toggleCandidate,
@@ -20,6 +22,8 @@ const job = (over: Partial<Job>): Job => ({
   current: null,
   waiting_for: null,
   error: null,
+  calls: [],
+  log: [],
   ...over,
 });
 
@@ -29,6 +33,25 @@ describe("formatSeconds", () => {
     expect(formatSeconds(170)).toBe("2:50");
     expect(formatSeconds(1804.8)).toBe("30:05");
     expect(formatSeconds(3725)).toBe("1:02:05");
+  });
+});
+
+describe("formatBytes", () => {
+  it("shows gigabytes, megabytes or kilobytes", () => {
+    expect(formatBytes(14_971_568_128)).toBe("15.0 GB");
+    expect(formatBytes(5_000_000)).toBe("5 MB");
+    expect(formatBytes(1_400)).toBe("1 kB");
+  });
+});
+
+describe("sparkline", () => {
+  it("draws the values left to right, the largest at the top", () => {
+    expect(sparkline([0, 50, 100], 100, 20)).toBe("0.0,20.0 50.0,10.0 100.0,0.0");
+  });
+
+  it("needs two values, and copes with all zeros", () => {
+    expect(sparkline([7], 100, 20)).toBe("");
+    expect(sparkline([0, 0], 10, 10)).toBe("0.0,10.0 10.0,10.0");
   });
 });
 
