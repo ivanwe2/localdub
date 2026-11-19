@@ -9,7 +9,9 @@ VENV=${VENV:-$HOME/venvs/demucs-gpu}
 
 need=()
 command -v hunspell >/dev/null && [ -f /usr/share/hunspell/bg_BG.dic ] || need+=(hunspell hunspell-bg)
-command -v fc-list >/dev/null && fc-list | grep -qi "DejaVu Sans" || need+=(fontconfig fonts-dejavu-core)
+# (grep reads all of fc-list's output: with -q it would stop at the first match, fc-list would get
+# a broken pipe, and pipefail would count that as "not installed")
+command -v fc-list >/dev/null && fc-list | grep -i "DejaVu Sans" >/dev/null || need+=(fontconfig fonts-dejavu-core)
 command -v git >/dev/null || need+=(git)
 if [ ${#need[@]} -gt 0 ]; then apt-get update -q && apt-get install -y -q "${need[@]}"; fi
 

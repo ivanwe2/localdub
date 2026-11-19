@@ -20,7 +20,9 @@ main() {
 
   echo "== the web app"
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
+  # the folder's name goes into the trap now: the trap runs after main() has ended, when its local
+  # variables are gone (and set -u would stop at a missing one)
+  trap "rm -rf -- '$tmp'" EXIT
   curl -fsSL "$url" -o "$tmp/localdub-app.tar.gz"
   # the checksum CI published with it: a broken or half download is never installed
   curl -fsSL "$url.sha256" -o "$tmp/localdub-app.tar.gz.sha256"
