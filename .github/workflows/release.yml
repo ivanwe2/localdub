@@ -1,0 +1,56 @@
+name: release
+
+# On every merge to main that touches the web app, build the package (static server + page) and put
+# it on the rolling GitHub release "app", so a machine can update with
+#   bash ~/localdub/deploy/update.sh
+# The download URL stays the same:
+#   https://github.com/<owner>/<repo>/releases/download/app/localdub-app.tar.gz
+on:
+  push:
+    branches: [main]
+    paths:
+      - "server/**"
+      - "web/**"
+      - "deploy/server/**"
+      - "rust-toolchain.toml"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false   # never cut an upload short; the next run follows
+
+permissions:
+  contents: write   # to create and update the release
+
+jobs:
+  app:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Rust toolchain (version and musl target from rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+          key: release-musl
+      - name: Build the package
+        run: bash deploy/server/build.sh
+      - name: Publish it on the release "app"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          build=$(cat dist/localdub-app/BUILD)
+          notes="The localdub web app, built from ${build}. Install or update on a Linux box:
+          bash ~/localdub/deploy/update.sh"
+          if ! gh release view app >/dev/null 2>&1; then
+            gh release create app --title "Web app (latest build)" --notes "$notes" --target "$GITHUB_SHA"
+          fi
+          gh release upload app dist/localdub-app.tar.gz --clobber
+          gh release edit app --notes "$notes"

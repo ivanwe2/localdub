@@ -143,16 +143,19 @@ server/target/release/localdub-server               # http://127.0.0.1:8080
 | `LOCALDUB_ALLOWED_HOSTS` | | other names the browser uses to reach it, e.g. `192.168.0.71:8080` |
 | `LOCALDUB_WEB` | `web/dist` | the built page |
 
-To put it on another Linux machine (no Rust or Node needed there), build a package in the dev
-container and install it as a systemd service; it listens on that machine only, so open it from
-your laptop through an SSH tunnel:
+To put it on a Linux machine (no Rust or Node needed there): CI builds the package (one static
+server binary plus the page) on every merge to `main` and publishes it on the GitHub release
+[`app`](https://github.com/ivanwe2/localdub/releases/tag/app). With the repo cloned to `~/localdub`
+(see Install), this updates the engine and installs or updates the web app as a systemd service:
 
 ```
-bash deploy/server/build.sh                          # dev container: dist/localdub-app.tar.gz
-scp dist/localdub-app.tar.gz root@gpu-box:           # laptop
-tar xzf localdub-app.tar.gz && bash localdub-app/install.sh     # on the machine, as root
+bash ~/localdub/deploy/update.sh                     # on the machine, as root
 ssh -N -L 8080:127.0.0.1:8080 root@gpu-box           # laptop, then open http://localhost:8080
 ```
+
+It listens on that machine only, hence the SSH tunnel. It won't restart the service while a run is
+going (`--force` does). To build the package yourself: `bash deploy/server/build.sh` in the dev
+container makes `dist/localdub-app.tar.gz`; unpack it on the machine and run its `install.sh`.
 
 In the page you upload a video (or give a path inside the home folder), start a run, follow it live,
 do the reviews (edit the text, *Approve and continue*), make and pick Shorts (tick them, *Render*),
