@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import { fileUrl, type Job } from "./api";
-import { formatSeconds, progress, suggestName, waitingText } from "./format";
+import {
+  approve,
+  candidates,
+  formatSeconds,
+  progress,
+  suggestName,
+  toggleCandidate,
+  uploadName,
+  waitingText,
+} from "./format";
 
 const job = (over: Partial<Job>): Job => ({
   run: "market",
@@ -57,6 +66,60 @@ describe("waitingText", () => {
     expect(waitingText(job({ waiting_for: { kind: "shorts", file: "/c.txt" } }))).toBe(
       "Pick the Shorts",
     );
+  });
+});
+
+describe("uploadName", () => {
+  it("cleans the name like run names and keeps the extension in lower case", () => {
+    expect(uploadName("My Video (1).MP4")).toBe("My-Video-1.mp4");
+    expect(uploadName("Пазар в София.mkv")).toBe("Пазар-в-София.mkv");
+    expect(uploadName("market.en.mp4")).toBe("market.en.mp4");
+    expect(uploadName("(((.mp4")).toBe("video.mp4");
+  });
+});
+
+describe("approve", () => {
+  it("sets the status line to approved, wherever it is", () => {
+    expect(approve("status: pending\n# notes\n[1] BG: x")).toBe("status: approved\n# notes\n[1] BG: x");
+    expect(approve("\nStatus: Pending\nrest")).toBe("\nstatus: approved\nrest");
+  });
+
+  it("adds one if the file has none", () => {
+    expect(approve("[1] BG: x")).toBe("status: approved\n[1] BG: x");
+  });
+});
+
+// as the engine writes it (src/localdub/shorts.py, write_candidates)
+const CANDIDATES = `status: pending
+# Shorts candidates, strongest first. Mark the ones to render with an x, like [x] (3 is a good number),
+# set the first line to 'status: approved', save, and run 'localdub shorts market --lang dub' again.
+
+[ ] 1   00:10-00:40 (30s)   sentences 3-9   "The Price is a Joke"
+    hook:   a surprising price
+    why:    stands alone
+    screen: market stalls
+
+[x] 2   01:05-01:47 (42s)   sentences 12-20   "Don't Touch the Outlets!"
+    hook:   a warning
+`;
+
+describe("candidates", () => {
+  it("lists the candidates with their marks, titles and details", () => {
+    const found = candidates(CANDIDATES);
+
+    expect(found.map((c) => [c.n, c.picked, c.title, c.when])).toEqual([
+      [1, false, "The Price is a Joke", "00:10-00:40 (30s)"],
+      [2, true, "Don't Touch the Outlets!", "01:05-01:47 (42s)"],
+    ]);
+    expect(found[0].details).toEqual(["hook:   a surprising price", "why:    stands alone", "screen: market stalls"]);
+  });
+
+  it("switches a candidate's mark and nothing else", () => {
+    const [first, second] = candidates(CANDIDATES);
+    const toggled = toggleCandidate(toggleCandidate(CANDIDATES, first.line), second.line);
+
+    expect(candidates(toggled).map((c) => c.picked)).toEqual([true, false]);
+    expect(toggled.replace("[x] 1", "[ ] 1").replace("[ ] 2", "[x] 2")).toBe(CANDIDATES);
   });
 });
 

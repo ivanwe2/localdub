@@ -154,9 +154,25 @@ tar xzf localdub-app.tar.gz && bash localdub-app/install.sh     # on the machine
 ssh -N -L 8080:127.0.0.1:8080 root@gpu-box           # laptop, then open http://localhost:8080
 ```
 
-The API: `GET /api/runs` (every run and its files), `POST /api/runs` (start one: `video`, `channel`,
-`name`, optional `no_review`, `shorts`), `GET /api/job` and `GET /api/job/events` (the current run,
-live as Server-Sent Events), `GET /files/<run>/<path>` (a run's files).
+In the page you upload a video (or give a path inside the home folder), start a run, follow it live,
+do the reviews (edit the text, *Approve and continue*), make and pick Shorts (tick them, *Render*),
+and watch or download the results.
+
+The API:
+
+| | |
+|---|---|
+| `GET /api/runs` | every run: its stages, files, and what it waits for (a review, picking Shorts) |
+| `POST /api/runs` | start one: `video`, `channel`, `name`, optional `no_review`, `shorts` |
+| `GET` / `PUT /api/runs/<run>/review` | the file the run waits for: read it, save it (plain text) |
+| `POST /api/runs/<run>/continue` | go on after a review or an error, or render the picked Shorts |
+| `POST /api/runs/<run>/shorts` | propose Shorts for a finished run: `{"lang": "dub"}` or `"original"` |
+| `GET /api/videos`, `PUT /api/videos/<file>` | the uploaded videos; upload one (the body is the file) |
+| `GET /api/job`, `GET /api/job/events` | the current run, and live as Server-Sent Events |
+| `GET /files/<run>/<path>` | a run's files |
+
+One run at a time (409 while one is going). The server only answers to its own host names and
+takes changes only from its own page (not from other sites open in the same browser).
 
 ## Development
 

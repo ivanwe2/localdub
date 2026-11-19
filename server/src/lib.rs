@@ -406,31 +406,57 @@ pub fn default_hosts(listen: &str) -> Vec<String> {
     hosts
 }
 
-/// Answers only requests addressed to one of `hosts` (the Host header, any letter case). That stops
-/// DNS rebinding: a web page from another site that points its own domain at this machine still
-/// sends its own domain as the Host. Requests without a Host header don't come from a browser and
-/// pass. (Like ASP.NET Core's AllowedHosts / HostFiltering.)
+/// Guards the server against other web sites open in the same browser:
+/// - **Host**: answers only requests addressed to one of `hosts` (any letter case). That stops DNS
+///   rebinding: a page from another site that points its own domain at this machine still sends
+///   its own domain as the Host. (Like ASP.NET Core's AllowedHosts / HostFiltering.)
+/// - **Origin**: anything that changes something (POST, PUT, …) must come from one of those hosts
+///   too, or the browser's `Sec-Fetch-Site` must not say "cross-site". That stops another site's
+///   page from making the browser send, say, a form to POST …/continue (cross-site request forgery).
+///
+/// Requests without these headers don't come from a browser (curl, scripts, the tests) and pass.
 pub fn allow_hosts(router: Router, hosts: Vec<String>) -> Router {
     let hosts = Arc::new(hosts);
     router.layer(middleware::from_fn(move |req: Request, next: Next| {
         let hosts = hosts.clone();
         async move {
-            let refused = req
-                .headers()
-                .get(header::HOST)
-                .map(|h| String::from_utf8_lossy(h.as_bytes()).into_owned())
-                .filter(|host| !hosts.iter().any(|h| h.eq_ignore_ascii_case(host)));
-            match refused {
-                Some(host) => {
-                    let msg = format!(
-                        "this server doesn't answer to host {host:?} (see LOCALDUB_ALLOWED_HOSTS)"
-                    );
-                    (StatusCode::FORBIDDEN, msg).into_response()
-                }
+            match refusal(&req, &hosts) {
+                Some(msg) => (StatusCode::FORBIDDEN, msg).into_response(),
                 None => next.run(req).await,
             }
         }
     }))
+}
+
+/// Why `allow_hosts` refuses this request, if it does.
+fn refusal(req: &Request, hosts: &[String]) -> Option<String> {
+    let header = |name| {
+        req.headers()
+            .get(name)
+            .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
+    };
+    let known = |host: &str| hosts.iter().any(|h| h.eq_ignore_ascii_case(host));
+
+    if let Some(host) = header(header::HOST).filter(|host| !known(host)) {
+        return Some(format!(
+            "this server doesn't answer to host {host:?} (see LOCALDUB_ALLOWED_HOSTS)"
+        ));
+    }
+    if req.method().is_safe() {
+        return None; // GET, HEAD, OPTIONS change nothing
+    }
+    if let Some(origin) = header(header::ORIGIN) {
+        let host = origin.split_once("://").map_or("", |(_, rest)| rest);
+        if !known(host) {
+            return Some(format!(
+                "requests from {origin} may not change anything here (see LOCALDUB_ALLOWED_HOSTS)"
+            ));
+        }
+    }
+    if header(header::HeaderName::from_static("sec-fetch-site")).as_deref() == Some("cross-site") {
+        return Some("requests from other sites may not change anything here".to_string());
+    }
+    None
 }
 
 #[cfg(test)]
@@ -594,6 +620,44 @@ mod tests {
         }
         let response = app.oneshot(request.body(Body::empty()).unwrap()).await;
         response.unwrap().status()
+    }
+
+    /// POST /api/runs/half/continue with these headers, through the guard; returns the status.
+    async fn continue_with(headers: &[(&str, &str)]) -> StatusCode {
+        let home = tempfile::tempdir().unwrap();
+        let state = test_state(home.path());
+        make_run(&state, "half", BEFORE_REVIEW1, &[]);
+        let app = allow_hosts(app(state), default_hosts("127.0.0.1:8080"));
+        let mut request = Request::post("/api/runs/half/continue");
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let response = app.oneshot(request.body(Body::empty()).unwrap()).await;
+        response.unwrap().status()
+    }
+
+    #[tokio::test]
+    async fn other_sites_cannot_make_the_browser_change_anything() {
+        let host = ("host", "localhost:8080");
+        let evil = ("origin", "https://evil.example");
+        let cross_site = ("sec-fetch-site", "cross-site");
+        let own_page = [
+            host,
+            ("origin", "http://localhost:8080"),
+            ("sec-fetch-site", "same-origin"),
+        ];
+
+        assert_eq!(continue_with(&[host, evil]).await, StatusCode::FORBIDDEN);
+        assert_eq!(
+            continue_with(&[host, cross_site]).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(continue_with(&own_page).await, StatusCode::ACCEPTED);
+        assert_eq!(
+            continue_with(&[host]).await,
+            StatusCode::ACCEPTED,
+            "curl, scripts"
+        );
     }
 
     #[tokio::test]

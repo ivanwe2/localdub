@@ -203,6 +203,62 @@ button.link {
   padding: 0;
 }
 
+button.secondary {
+  background: none;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+select,
+textarea {
+  font: inherit;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  min-width: 0;
+}
+
+input[type="file"] {
+  padding: 6px;
+}
+
+textarea {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.85rem;
+  margin: 8px 0;
+  resize: vertical;
+}
+
+.review {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.candidates {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+}
+
+.candidates li {
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+
+.candidates li:first-child {
+  border-top: none;
+}
+
+.detail {
+  font-size: 0.85rem;
+  margin-left: 26px;
+}
+
 .runs {
   list-style: none;
   padding: 0;
