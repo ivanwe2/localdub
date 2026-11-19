@@ -41,7 +41,8 @@ jobs:
       - uses: actions/checkout@v7
       - name: Rust toolchain (the version pinned in rust-toolchain.toml)
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2   # keeps compiled dependencies between runs
+      # keeps compiled dependencies between runs; third-party, so pinned to an exact commit
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: server
       - run: cargo fmt --check

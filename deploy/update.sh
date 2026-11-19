@@ -21,8 +21,14 @@ main() {
   echo "== the web app"
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
-  curl -fsSL "$url" -o "$tmp/app.tar.gz"
-  tar -xzf "$tmp/app.tar.gz" -C "$tmp"
+  curl -fsSL "$url" -o "$tmp/localdub-app.tar.gz"
+  # the checksum CI published with it: a broken or half download is never installed
+  curl -fsSL "$url.sha256" -o "$tmp/localdub-app.tar.gz.sha256"
+  (cd "$tmp" && sha256sum --quiet -c localdub-app.tar.gz.sha256) || {
+    echo "the download doesn't match its checksum; nothing was installed" >&2
+    exit 1
+  }
+  tar -xzf "$tmp/localdub-app.tar.gz" -C "$tmp"
   new=$(cat "$tmp/localdub-app/BUILD" 2>/dev/null || echo unknown)
   old=$(cat /opt/localdub/BUILD 2>/dev/null || echo "not installed")
   if [ "$new" = "$old" ] && [ "${1:-}" != "--force" ]; then

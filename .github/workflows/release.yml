@@ -5,6 +5,10 @@ name: release
 #   bash ~/localdub/deploy/update.sh
 # The download URL stays the same:
 #   https://github.com/<owner>/<repo>/releases/download/app/localdub-app.tar.gz
+#
+# Two jobs, because the package ends up running as root on the box: the build job runs third-party
+# code (the cache action, npm and cargo packages) and may only read the repository; the publish job
+# may write releases but runs no third-party code, only GitHub's own actions and the gh CLI.
 on:
   push:
     branches: [main]
@@ -21,10 +25,10 @@ concurrency:
   cancel-in-progress: false   # never cut an upload short; the next run follows
 
 permissions:
-  contents: write   # to create and update the release
+  contents: read
 
 jobs:
-  app:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -36,21 +40,48 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Rust toolchain (version and musl target from rust-toolchain.toml)
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
+      # third-party: pinned to an exact commit, so a moved tag can't change what runs here
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: server
           key: release-musl
       - name: Build the package
         run: bash deploy/server/build.sh
+      - name: Checksum (update.sh checks it before installing)
+        run: |
+          cd dist
+          sha256sum localdub-app.tar.gz > localdub-app.tar.gz.sha256
+          cp localdub-app/BUILD BUILD
+      - uses: actions/upload-artifact@v7
+        with:
+          name: localdub-app
+          path: |
+            dist/localdub-app.tar.gz
+            dist/localdub-app.tar.gz.sha256
+            dist/BUILD
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write   # to create and update the release
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: localdub-app
+          path: dist
       - name: Publish it on the release "app"
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          build=$(cat dist/localdub-app/BUILD)
+          build=$(cat dist/BUILD)
           notes="The localdub web app, built from ${build}. Install or update on a Linux box:
           bash ~/localdub/deploy/update.sh"
           if ! gh release view app >/dev/null 2>&1; then
             gh release create app --title "Web app (latest build)" --notes "$notes" --target "$GITHUB_SHA"
           fi
-          gh release upload app dist/localdub-app.tar.gz --clobber
+          gh release upload app dist/localdub-app.tar.gz dist/localdub-app.tar.gz.sha256 --clobber
           gh release edit app --notes "$notes"
