@@ -42,7 +42,8 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 | `deploy/install.sh` | install/update on CT 103 from git into the Demucs venv |
 | `deploy/gpu/` | the GPU box: `llama-swap.yaml` (models + groups), `demucs_server.py` (Demucs over HTTP), `llama-swap.service` |
 | `server/src/` | Rust server: `lib.rs` (routes: `/api/…`, `/files/…`, the page), `runs.rs` (runs on disk), `events.rs` (engine `--json` lines), `runner.rs` (runs the engine), `job.rs` (the current run), `start.rs` (POST /api/runs: validation, engine args), `main.rs` (env settings); `testdata/fake-localdub.sh` |
-| `deploy/server/` | the web app on a Linux box: `build.sh` (dev container → `dist/localdub-app.tar.gz`: static musl server + page), `install.sh` (→ `/opt/localdub`, systemd `localdub-server`, 127.0.0.1:8080; laptop uses `ssh -N -L 8080:127.0.0.1:8080`) |
+| `deploy/server/` | the web app on a Linux box: `build.sh` (dev container or CI → `dist/localdub-app.tar.gz`: static musl server + page + `BUILD`), `install.sh` (→ `/opt/localdub`, systemd `localdub-server`, 127.0.0.1:8080; refuses while a run is going unless `--force`; laptop uses `ssh -N -L 8080:127.0.0.1:8080`) |
+| `deploy/update.sh` | on CT 103: engine (git pull + venv install) and the latest web app from the GitHub release `app` (CI `release.yml` rebuilds it on every merge to main touching server/web/deploy-server) |
 | `web/` | React + TypeScript page (Vite): `src/api.ts` (API types/client), `src/App.tsx` (job panel, new-run form, runs list), `src/format.ts` (+ tests) |
 
 ## Conventions
