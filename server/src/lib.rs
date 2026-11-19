@@ -12,22 +12,33 @@ pub mod start;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{Request, State};
+use axum::body::Body;
+use axum::extract::{DefaultBodyLimit, Path as UrlPath, Request, State};
 use axum::http::{StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::IntoResponse;
 use axum::response::sse::{self, KeepAlive, Sse};
-use axum::routing::get;
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
+use serde::Serialize;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::watch;
 use tokio_stream::wrappers::WatchStream;
 use tokio_stream::{Stream, StreamExt};
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::job::{Job, JobState};
-use crate::start::{StartRequest, engine_args};
+use crate::runs::{RunSummary, Waiting};
+use crate::start::{ShortsRequest, StartRequest};
 
-#[derive(serde::Serialize)]
+/// An error answer: a status code and a plain-text reason the page can show as it is.
+type Failure = (StatusCode, String);
+
+fn server_error(e: impl std::fmt::Display) -> Failure {
+    (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+}
+
+#[derive(Serialize)]
 struct Health {
     ok: bool,
     version: &'static str,
@@ -37,7 +48,7 @@ struct Health {
 /// reference-counted pointer, so every clone points at the same engine command and the same job.
 #[derive(Clone)]
 pub struct AppState {
-    /// Where the channels and runs live (LOCALDUB_HOME, else ~/dub).
+    /// Where the channels, runs and uploaded videos live (LOCALDUB_HOME, else ~/dub).
     pub home: PathBuf,
     /// The engine's command: the program and any arguments that come before ours, e.g. ["localdub"].
     pub engine: Arc<Vec<String>>,
@@ -63,6 +74,10 @@ impl AppState {
         self.web = Some(dir);
         self
     }
+
+    fn videos(&self) -> PathBuf {
+        self.home.join("videos")
+    }
 }
 
 async fn health() -> Json<Health> {
@@ -72,28 +87,14 @@ async fn health() -> Json<Health> {
     })
 }
 
-/// GET /api/runs: every run on disk, newest first.
-async fn get_runs(
-    State(state): State<AppState>,
-) -> Result<Json<Vec<runs::RunSummary>>, (StatusCode, String)> {
-    let list = runs::list_runs(&state.home)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    Ok(Json(list))
-}
-
-/// POST /api/runs: starts the engine for this run in the background and answers at once
-/// (202 Accepted) with the new job. One run at a time: while one is running, 409 Conflict.
-async fn start_run(
-    State(state): State<AppState>,
-    Json(req): Json<StartRequest>,
-) -> Result<(StatusCode, Json<Job>), (StatusCode, String)> {
-    req.validate()
-        .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e))?;
+/// Starts the engine with `args` for the run `run`, in the background, and returns the new job at
+/// once. One job at a time: while one is running, 409 Conflict. Every endpoint that starts the
+/// engine (a new run, continuing one, Shorts) goes through here.
+fn launch(state: &AppState, run: &str, args: Vec<String>) -> Result<Job, Failure> {
     let Some((program, before)) = state.engine.split_first() else {
-        let msg = "no engine command configured (LOCALDUB_ENGINE)".to_string();
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, msg));
+        return Err(server_error(
+            "no engine command configured (LOCALDUB_ENGINE)",
+        ));
     };
 
     // Check and claim in one step, inside the channel's lock, so two requests can't both start.
@@ -104,22 +105,22 @@ async fn start_run(
             false // nothing changed, nobody is told
         }
         _ => {
-            *current = Some(Job::new(&req.name));
+            *current = Some(Job::new(run));
             true
         }
     });
-    if let Some(run) = busy_with {
-        let msg = format!("'{run}' is still running; one run at a time");
+    if let Some(busy) = busy_with {
+        let msg = format!("'{busy}' is still running; one run at a time");
         return Err((StatusCode::CONFLICT, msg));
     }
 
     // The background task gets its own copies: it outlives this request.
     let program = program.clone();
-    let mut args = before.to_vec();
-    args.extend(engine_args(&req));
+    let mut all_args = before.to_vec();
+    all_args.extend(args);
     let job = state.job.clone();
     tokio::spawn(async move {
-        let outcome = runner::run_engine(&program, &args, |event| {
+        let outcome = runner::run_engine(&program, &all_args, |event| {
             job.send_modify(|current| {
                 if let Some(job) = current {
                     job.apply(event);
@@ -137,8 +138,214 @@ async fn start_run(
         });
     });
 
-    let job = state.job.borrow().clone().expect("the job was set above");
+    Ok(state.job.borrow().clone().expect("the job was set above"))
+}
+
+/// The run named in the URL, or 404 Not Found.
+async fn find_run(state: &AppState, name: &str) -> Result<RunSummary, Failure> {
+    let not_found = || (StatusCode::NOT_FOUND, format!("no run called {name:?}"));
+    if !start::is_safe_name(name) {
+        return Err(not_found());
+    }
+    runs::read_run(&state.home, name)
+        .await
+        .map_err(server_error)?
+        .ok_or_else(not_found)
+}
+
+/// GET /api/runs: every run on disk, newest first.
+async fn get_runs(State(state): State<AppState>) -> Result<Json<Vec<RunSummary>>, Failure> {
+    let list = runs::list_runs(&state.home).await.map_err(server_error)?;
+    Ok(Json(list))
+}
+
+/// POST /api/runs: starts a new run (202 Accepted, with the job).
+async fn start_run(
+    State(state): State<AppState>,
+    Json(req): Json<StartRequest>,
+) -> Result<(StatusCode, Json<Job>), Failure> {
+    req.validate(&state.home)
+        .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e))?;
+    let job = launch(&state, &req.name, start::engine_args(&req))?;
     Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
+/// POST /api/runs/{name}/continue: goes on where the run stopped: after a review or an error
+/// (`localdub run <name>`), or renders the picked Shorts (`localdub shorts <name> --lang ..`).
+async fn continue_run(
+    State(state): State<AppState>,
+    UrlPath(name): UrlPath<String>,
+) -> Result<(StatusCode, Json<Job>), Failure> {
+    let run = find_run(&state, &name).await?;
+    let args = match &run.waiting_for {
+        Some(Waiting {
+            kind,
+            lang: Some(lang),
+            ..
+        }) if kind == "shorts" => start::shorts_args(&name, lang),
+        _ if !run.finished => start::continue_args(&name),
+        _ => {
+            let msg = format!("'{name}' is finished and waits for nothing");
+            return Err((StatusCode::CONFLICT, msg));
+        }
+    };
+    Ok((StatusCode::ACCEPTED, Json(launch(&state, &name, args)?)))
+}
+
+/// POST /api/runs/{name}/shorts `{"lang": "dub"}`: proposes Shorts for a finished run; the run then
+/// waits for you to pick them (its review is the candidates list), and continuing renders them.
+async fn make_shorts(
+    State(state): State<AppState>,
+    UrlPath(name): UrlPath<String>,
+    Json(req): Json<ShortsRequest>,
+) -> Result<(StatusCode, Json<Job>), Failure> {
+    let run = find_run(&state, &name).await?;
+    if !run.finished {
+        let msg = format!("'{name}' isn't dubbed yet; Shorts come after the dub");
+        return Err((StatusCode::CONFLICT, msg));
+    }
+    let job = launch(&state, &name, start::shorts_args(&name, req.lang.as_str()))?;
+    Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
+/// What a run waits for, with the text of the file to edit.
+#[derive(Serialize)]
+struct Review {
+    kind: String,
+    lang: Option<String>,
+    file: String,
+    text: String,
+}
+
+/// The run's review file: the one it waits for, or 404 if it waits for nothing.
+async fn review_of(state: &AppState, name: &str) -> Result<(Waiting, PathBuf), Failure> {
+    let run = find_run(state, name).await?;
+    let Some(waiting) = run.waiting_for else {
+        let msg = format!("'{name}' waits for no review");
+        return Err((StatusCode::NOT_FOUND, msg));
+    };
+    let path = state.home.join("runs").join(name).join(&waiting.file);
+    Ok((waiting, path))
+}
+
+/// GET /api/runs/{name}/review: the file the run waits for, to edit in the page.
+async fn get_review(
+    State(state): State<AppState>,
+    UrlPath(name): UrlPath<String>,
+) -> Result<Json<Review>, Failure> {
+    let (waiting, path) = review_of(&state, &name).await?;
+    let text = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(server_error)?;
+    Ok(Json(Review {
+        kind: waiting.kind,
+        lang: waiting.lang,
+        file: waiting.file,
+        text,
+    }))
+}
+
+/// PUT /api/runs/{name}/review, the body is the file's new text: saves it (204 No Content). It is
+/// written to a temporary file first and then renamed, so the engine never reads half a file.
+async fn put_review(
+    State(state): State<AppState>,
+    UrlPath(name): UrlPath<String>,
+    text: String,
+) -> Result<StatusCode, Failure> {
+    let (_, path) = review_of(&state, &name).await?;
+    let tmp = path.with_extension("txt.tmp");
+    tokio::fs::write(&tmp, text).await.map_err(server_error)?;
+    tokio::fs::rename(&tmp, &path).await.map_err(server_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// A video in the uploads folder.
+#[derive(Serialize)]
+struct Video {
+    name: String,
+    /// The path to give POST /api/runs as `video`.
+    path: String,
+    bytes: u64,
+}
+
+/// GET /api/videos: the uploaded videos, by name.
+async fn list_videos(State(state): State<AppState>) -> Result<Json<Vec<Video>>, Failure> {
+    let mut entries = match tokio::fs::read_dir(state.videos()).await {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Json(Vec::new())),
+        Err(e) => return Err(server_error(e)),
+    };
+    let mut videos = Vec::new();
+    while let Some(entry) = entries.next_entry().await.map_err(server_error)? {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let meta = entry.metadata().await.map_err(server_error)?;
+        if meta.is_file() && !name.starts_with('.') {
+            let path = entry.path().to_string_lossy().into_owned();
+            videos.push(Video {
+                name,
+                path,
+                bytes: meta.len(),
+            });
+        }
+    }
+    videos.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(Json(videos))
+}
+
+/// PUT /api/videos/{file}, the body is the video: stores it in the uploads folder, streamed to
+/// disk piece by piece so even a big video never sits in memory (201 Created). An existing video
+/// isn't replaced (409); an interrupted upload leaves nothing behind.
+async fn upload_video(
+    State(state): State<AppState>,
+    UrlPath(file): UrlPath<String>,
+    body: Body,
+) -> Result<(StatusCode, Json<Video>), Failure> {
+    if !start::is_safe_file_name(&file) {
+        let msg = format!("file name {file:?}: {}", start::NAME_RULE);
+        return Err((StatusCode::UNPROCESSABLE_ENTITY, msg));
+    }
+    let dir = state.videos();
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(server_error)?;
+    let dest = dir.join(&file);
+    if tokio::fs::try_exists(&dest).await.unwrap_or(false) {
+        let msg = format!("{file} is already uploaded");
+        return Err((StatusCode::CONFLICT, msg));
+    }
+
+    let part = dir.join(format!(".{file}.part")); // hidden until complete
+    let mut out = tokio::fs::File::create(&part).await.map_err(server_error)?;
+    let mut bytes = 0u64;
+    let mut stream = body.into_data_stream();
+    while let Some(chunk) = stream.next().await {
+        let written = match chunk {
+            Ok(chunk) => out.write_all(&chunk).await.map(|_| chunk.len()),
+            Err(e) => Err(std::io::Error::other(e)),
+        };
+        match written {
+            Ok(n) => bytes += n as u64,
+            Err(e) => {
+                drop(out);
+                let _ = tokio::fs::remove_file(&part).await;
+                let msg = format!("the upload of {file} broke off: {e}");
+                return Err((StatusCode::BAD_REQUEST, msg));
+            }
+        }
+    }
+    out.flush().await.map_err(server_error)?;
+    drop(out);
+    tokio::fs::rename(&part, &dest)
+        .await
+        .map_err(server_error)?;
+
+    let path = dest.to_string_lossy().into_owned();
+    let video = Video {
+        name: file,
+        path,
+        bytes,
+    };
+    Ok((StatusCode::CREATED, Json(video)))
 }
 
 /// GET /api/job: the current (or last) job; null if nothing has run since the server started.
@@ -157,7 +364,7 @@ async fn job_events(
 }
 
 /// The whole server:
-/// - `/api/...` the JSON API (health, runs, the job and its live events)
+/// - `/api/...` the JSON API: health, runs (start, continue, review, Shorts), uploads, the job
 /// - `/files/<run>/<path>` a run's files, e.g. the dubbed video (ServeDir also answers range
 ///   requests, so the browser can seek in a video, and never serves anything outside runs/)
 /// - everything else: the web UI, with index.html for any path it doesn't have
@@ -165,6 +372,14 @@ pub fn app(state: AppState) -> Router {
     let api = Router::new()
         .route("/health", get(health))
         .route("/runs", get(get_runs).post(start_run))
+        .route("/runs/{name}/continue", post(continue_run))
+        .route("/runs/{name}/shorts", post(make_shorts))
+        .route("/runs/{name}/review", get(get_review).put(put_review))
+        .route("/videos", get(list_videos))
+        .route(
+            "/videos/{file}",
+            put(upload_video).layer(DefaultBodyLimit::disable()), // videos are big
+        )
         .route("/job", get(get_job))
         .route("/job/events", get(job_events));
     let mut router = Router::new()
@@ -176,7 +391,6 @@ pub fn app(state: AppState) -> Router {
     }
     router.with_state(state)
 }
-
 /// The Host header values the server answers to when it listens on `listen` (e.g.
 /// "127.0.0.1:8080"): localhost, 127.0.0.1 and [::1] on that port, and the listen address itself.
 pub fn default_hosts(listen: &str) -> Vec<String> {
@@ -532,6 +746,228 @@ mod tests {
         let job = job_when_settled(&state).await;
         assert_eq!(job["run"], "slow-run");
         assert_eq!(job["state"], "done");
+    }
+
+    /// A request with a body; `send` returns its status and JSON answer (Null for plain text).
+    fn with_body(
+        method: &str,
+        path: &str,
+        content_type: &str,
+        body: impl Into<Body>,
+    ) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(path)
+            .header("content-type", content_type)
+            .body(body.into())
+            .unwrap()
+    }
+
+    /// A run folder as the engine leaves it: these stages done, and these files (path, text) in it.
+    fn make_run(state: &AppState, name: &str, done: &[&str], files: &[(&str, &str)]) {
+        let dir = state.home.join("runs").join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let run_state = json!({"source": "/v.mp4", "channel": "c", "created": "2026-11-20T10:00:00",
+                               "done": done, "timings": {}});
+        std::fs::write(dir.join("state.json"), run_state.to_string()).unwrap();
+        for (path, text) in files {
+            let file = dir.join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, text).unwrap();
+        }
+    }
+
+    const BEFORE_REVIEW1: &[&str] = &["prep", "separate", "transcribe", "spelling"];
+    const FINISHED: &[&str] = &["prep", "review1", "review2", "voice", "mix"];
+
+    #[tokio::test]
+    async fn a_review_is_read_saved_and_then_the_run_continues() {
+        let home = tempfile::tempdir().unwrap();
+        let state = test_state(home.path());
+        let review = (
+            "review-1-transcript.txt",
+            "status: pending\n[1] BG: Здравей\n",
+        );
+        make_run(&state, "done-run", BEFORE_REVIEW1, &[review]);
+
+        let (_, runs) = get_json(app(state.clone()), "/api/runs").await;
+        assert_eq!(runs[0]["waiting_for"]["kind"], "review1");
+
+        let (status, review) = get_json(app(state.clone()), "/api/runs/done-run/review").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(review["kind"], "review1");
+        assert_eq!(review["text"], "status: pending\n[1] BG: Здравей\n");
+
+        let edited = "status: approved\n[1] BG: Здравейте\n";
+        let put = with_body("PUT", "/api/runs/done-run/review", "text/plain", edited);
+        let (status, _) = send(app(state.clone()), put).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        let file = state.home.join("runs/done-run/review-1-transcript.txt");
+        assert_eq!(std::fs::read_to_string(file).unwrap(), edited);
+
+        let (status, job) =
+            post_json(app(state.clone()), "/api/runs/done-run/continue", json!({})).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(job["run"], "done-run");
+        let job = job_when_settled(&state).await;
+        assert_eq!(
+            job["state"], "done",
+            "the fake engine's done-run story ran: {job}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_run_that_waits_for_nothing_has_no_review() {
+        let home = tempfile::tempdir().unwrap();
+        let state = test_state(home.path());
+        make_run(&state, "plain", FINISHED, &[]);
+
+        let (get, _) = get_json(app(state.clone()), "/api/runs/plain/review").await;
+        let put = with_body(
+            "PUT",
+            "/api/runs/plain/review",
+            "text/plain",
+            "status: approved",
+        );
+        let (put, _) = send(app(state), put).await;
+
+        assert_eq!((get, put), (StatusCode::NOT_FOUND, StatusCode::NOT_FOUND));
+    }
+
+    #[tokio::test]
+    async fn a_finished_run_is_not_continued_but_makes_shorts() {
+        let home = tempfile::tempdir().unwrap();
+        let state = test_state(home.path());
+        make_run(&state, "market", FINISHED, &[]);
+
+        let (again, _) =
+            post_json(app(state.clone()), "/api/runs/market/continue", json!({})).await;
+        let body = json!({"lang": "dub"});
+        let (shorts, _) = post_json(app(state.clone()), "/api/runs/market/shorts", body).await;
+
+        assert_eq!(again, StatusCode::CONFLICT);
+        assert_eq!(shorts, StatusCode::ACCEPTED);
+        let job = job_when_settled(&state).await;
+        assert_eq!(job["state"], "waiting");
+        assert_eq!(job["waiting_for"]["kind"], "shorts");
+    }
+
+    #[tokio::test]
+    async fn shorts_wait_for_the_dub() {
+        let home = tempfile::tempdir().unwrap();
+        let state = test_state(home.path());
+        make_run(&state, "half", BEFORE_REVIEW1, &[]);
+
+        let body = json!({"lang": "original"});
+        let (status, _) = post_json(app(state), "/api/runs/half/shorts", body).await;
+
+        assert_eq!(status, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn picked_shorts_are_rendered_by_continuing_with_the_shorts_command() {
+        let home = tempfile::tempdir().unwrap();
+        let state = test_state(home.path());
+        let picked = (
+            "shorts/dub/candidates.txt",
+            "status: approved\n[x] 1   00:10-00:40\n",
+        );
+        make_run(&state, "market", FINISHED, &[picked]);
+
+        let (status, _) =
+            post_json(app(state.clone()), "/api/runs/market/continue", json!({})).await;
+
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let job = job_when_settled(&state).await;
+        assert_eq!(
+            job["waiting_for"]["kind"], "shorts",
+            "the engine ran `shorts`: {job}"
+        );
+    }
+
+    #[tokio::test]
+    async fn runs_that_do_not_exist_are_not_found() {
+        let home = tempfile::tempdir().unwrap();
+        let state = test_state(home.path());
+
+        for path in ["/api/runs/nothing/review", "/api/runs/..%2F..%2Fetc/review"] {
+            let (status, _) = get_json(app(state.clone()), path).await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{path}");
+        }
+        let (status, _) = post_json(app(state), "/api/runs/nothing/continue", json!({})).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn a_video_is_uploaded_to_disk_and_listed() {
+        let home = tempfile::tempdir().unwrap();
+        let state = test_state(home.path());
+        let video = vec![7u8; 3 * 1024 * 1024]; // bigger than axum's usual 2 MB limit for a body
+
+        let put = with_body("PUT", "/api/videos/market.mp4", "video/mp4", video.clone());
+        let (status, uploaded) = send(app(state.clone()), put).await;
+
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(uploaded["bytes"], video.len());
+        let path = uploaded["path"].as_str().unwrap().to_string();
+        assert_eq!(std::fs::read(&path).unwrap(), video);
+        let (_, videos) = get_json(app(state.clone()), "/api/videos").await;
+        assert_eq!(
+            videos,
+            json!([{"name": "market.mp4", "path": path, "bytes": video.len()}])
+        );
+
+        let again = with_body("PUT", "/api/videos/market.mp4", "video/mp4", vec![1u8]);
+        let (status, _) = send(app(state.clone()), again).await;
+        assert_eq!(
+            status,
+            StatusCode::CONFLICT,
+            "an uploaded video isn't replaced"
+        );
+
+        // and the uploaded video can be dubbed
+        let body = json!({"video": path, "channel": "c", "name": "done-run"});
+        let (status, _) = post_json(app(state), "/api/runs", body).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+    }
+
+    #[tokio::test]
+    async fn uploads_with_unsafe_names_are_refused() {
+        let home = tempfile::tempdir().unwrap();
+        let state = test_state(home.path());
+
+        for name in ["..%2Fescape.mp4", ".hidden.mp4", "a%20b.mp4"] {
+            let put = with_body(
+                "PUT",
+                &format!("/api/videos/{name}"),
+                "video/mp4",
+                vec![1u8],
+            );
+            let (status, _) = send(app(state.clone()), put).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{name}");
+        }
+        assert!(!home.path().join("escape.mp4").exists());
+    }
+
+    #[tokio::test]
+    async fn a_video_outside_the_home_folder_is_refused() {
+        let home = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::NamedTempFile::new().unwrap();
+        let body = json!({"video": elsewhere.path(), "channel": "c", "name": "x"});
+
+        let request = with_body("POST", "/api/runs", "application/json", body.to_string());
+        let (status, text) = get_text_from(app(test_state(home.path())), request).await;
+
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(text.contains("only videos inside"), "{text}");
+    }
+
+    /// Sends a request and returns the status and the body as text.
+    async fn get_text_from(app: Router, request: Request<Body>) -> (StatusCode, String) {
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, String::from_utf8_lossy(&bytes).into_owned())
     }
 
     #[tokio::test]

@@ -10,6 +10,13 @@ case " $* " in
 esac
 echo "fake-localdub: messages for people go to stderr" >&2
 
+# `shorts <run> --lang <lang>`: proposes candidates and stops for you to pick them
+if [ "$1" = "shorts" ]; then
+  echo "{\"event\": \"start\", \"command\": \"shorts\", \"run\": \"$2\", \"channel\": \"c\", \"dir\": \"/tmp/runs/$2\", \"lang\": \"$4\"}"
+  echo "{\"event\": \"result\", \"status\": \"waiting\", \"exit_code\": 3, \"run\": \"$2\", \"waiting_for\": {\"kind\": \"shorts\", \"lang\": \"$4\", \"file\": \"/tmp/runs/$2/shorts/$4/candidates.txt\"}}"
+  exit 3
+fi
+
 case "$(basename "$2")" in
   done-run)
     echo '{"event": "start", "command": "run", "run": "done-run", "channel": "c", "dir": "/tmp/runs/done-run", "stages": ["prep", "mix"], "done": []}'
