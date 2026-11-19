@@ -1,7 +1,33 @@
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 
-import { fileUrl, followJob, type Job, listRuns, type RunSummary, startRun } from "./api";
-import { formatSeconds, progress, suggestName, waitingText } from "./format";
+import {
+  continueRun,
+  fileUrl,
+  followJob,
+  getReview,
+  type Job,
+  listRuns,
+  listVideos,
+  makeShorts,
+  type Review,
+  type RunSummary,
+  saveReview,
+  startRun,
+  uploadVideo,
+  type Video,
+} from "./api";
+import {
+  approve,
+  candidates,
+  formatSeconds,
+  progress,
+  suggestName,
+  toggleCandidate,
+  uploadName,
+  waitingText,
+} from "./format";
+
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export default function App() {
   const [job, setJob] = useState<Job | null>(null);
@@ -14,13 +40,14 @@ export default function App() {
         setRuns(list);
         setRunsError(null);
       })
-      .catch((e: Error) => setRunsError(`Couldn't load the runs: ${e.message}`));
+      .catch((e) => setRunsError(`Couldn't load the runs: ${message(e)}`));
   }, []);
 
   useEffect(() => followJob(setJob), []);
   // The list changes when a run starts or ends, so reload it then.
   useEffect(refreshRuns, [refreshRuns, job?.run, job?.state]);
 
+  const busy = job?.state === "running";
   return (
     <main>
       <header>
@@ -28,8 +55,8 @@ export default function App() {
         <p className="muted">Dub a video into another language in the creator's own voice.</p>
       </header>
       <JobPanel job={job} />
-      <NewRun busy={job?.state === "running"} />
-      <Runs runs={runs} error={runsError} />
+      <NewRun busy={busy} />
+      <Runs runs={runs} error={runsError} busy={busy} onChange={refreshRuns} />
     </main>
   );
 }
@@ -40,31 +67,33 @@ function JobPanel({ job }: { job: Job | null }) {
     return <section className="card muted">Nothing has run since the server started.</section>;
   }
   const percent = Math.round(progress(job) * 100);
-  const continueWith =
-    job.waiting_for?.kind === "shorts" ? `localdub shorts ${job.run}` : `localdub run ${job.run}`;
   return (
     <section className="card" aria-live="polite">
       <div className="row">
         <h2>{job.run}</h2>
         <span className={`badge ${job.state}`}>{job.state}</span>
       </div>
-      <div className="bar" role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}>
-        <div style={{ width: `${percent}%` }} />
-      </div>
-      <ol className="stages">
-        {job.stages.map((stage) => (
-          <li
-            key={stage}
-            className={job.done.includes(stage) ? "done" : stage === job.current ? "current" : ""}
-          >
-            {stage}
-          </li>
-        ))}
-      </ol>
-      {job.state === "waiting" && job.waiting_for && (
+      {job.stages.length > 0 && (
+        <>
+          <div className="bar" role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}>
+            <div style={{ width: `${percent}%` }} />
+          </div>
+          <ol className="stages">
+            {job.stages.map((stage) => (
+              <li
+                key={stage}
+                className={job.done.includes(stage) ? "done" : stage === job.current ? "current" : ""}
+              >
+                {stage}
+              </li>
+            ))}
+          </ol>
+        </>
+      )}
+      {job.state === "running" && job.stages.length === 0 && <p className="muted">Working…</p>}
+      {job.state === "waiting" && (
         <p className="note">
-          {waitingText(job)}: edit <code>{job.waiting_for.file}</code>, change its first line to{" "}
-          <code>status: approved</code>, then continue with <code>{continueWith}</code>.
+          {waitingText(job)}: open it under <strong>Runs</strong> below.
         </p>
       )}
       {job.state === "failed" && <p className="error">{job.error}</p>}
@@ -89,9 +118,11 @@ function remember(key: string, value: string) {
   }
 }
 
-/** The form that starts a run (POST /api/runs). */
+/** The form that starts a run (POST /api/runs), with uploading the video. */
 function NewRun({ busy }: { busy: boolean }) {
+  const [videos, setVideos] = useState<Video[]>([]);
   const [video, setVideo] = useState("");
+  const [upload, setUpload] = useState<number | null>(null); // 0..1 while uploading
   const [channel, setChannel] = useState(() => remembered("localdub.channel"));
   const [name, setName] = useState("");
   const [nameEdited, setNameEdited] = useState(false);
@@ -100,9 +131,30 @@ function NewRun({ busy }: { busy: boolean }) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function changeVideo(value: string) {
-    setVideo(value);
-    if (!nameEdited) setName(suggestName(value));
+  const refreshVideos = useCallback(() => {
+    listVideos()
+      .then(setVideos)
+      .catch(() => setVideos([]));
+  }, []);
+  useEffect(refreshVideos, [refreshVideos]);
+
+  function chooseVideo(path: string) {
+    setVideo(path);
+    if (!nameEdited) setName(suggestName(path));
+  }
+
+  async function uploadFile(file: File) {
+    setError(null);
+    setUpload(0);
+    try {
+      const uploaded = await uploadVideo(file, uploadName(file.name), setUpload);
+      refreshVideos();
+      chooseVideo(uploaded.path);
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setUpload(null);
+    }
   }
 
   async function submit(event: FormEvent) {
@@ -116,25 +168,51 @@ function NewRun({ busy }: { busy: boolean }) {
       setName("");
       setNameEdited(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(message(e));
     } finally {
       setSending(false);
     }
   }
 
+  const uploading = upload !== null;
   return (
     <section className="card">
       <h2>New run</h2>
       <form onSubmit={submit}>
+        <div className="row">
+          <label>
+            Video
+            <select value={videos.some((v) => v.path === video) ? video : ""} onChange={(e) => chooseVideo(e.target.value)}>
+              <option value="">{videos.length ? "Choose an uploaded video…" : "No uploaded videos yet"}</option>
+              {videos.map((v) => (
+                <option key={v.path} value={v.path}>
+                  {v.name} ({(v.bytes / 1e6).toFixed(0)} MB)
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Upload a video
+            <input
+              type="file"
+              accept="video/*"
+              disabled={uploading}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (file) void uploadFile(file);
+              }}
+            />
+          </label>
+        </div>
+        {uploading && (
+          <div className="bar" role="progressbar" aria-valuenow={Math.round(upload * 100)} aria-valuemin={0} aria-valuemax={100}>
+            <div style={{ width: `${upload * 100}%` }} />
+          </div>
+        )}
         <label>
-          Video
-          <input
-            value={video}
-            onChange={(e) => changeVideo(e.target.value)}
-            placeholder="/root/dub/videos/market.mp4"
-            required
-          />
-          <small className="muted">A path on the machine where the server runs.</small>
+          …or a path on the server
+          <input value={video} onChange={(e) => chooseVideo(e.target.value)} placeholder="/root/dub/excerpt.mp4" required />
         </label>
         <div className="row">
           <label>
@@ -171,7 +249,7 @@ function NewRun({ busy }: { busy: boolean }) {
           </label>
         </div>
         {error && <p className="error">{error}</p>}
-        <button type="submit" disabled={sending || busy}>
+        <button type="submit" disabled={sending || busy || uploading}>
           {busy ? "A run is going…" : sending ? "Starting…" : "Start"}
         </button>
       </form>
@@ -179,8 +257,10 @@ function NewRun({ busy }: { busy: boolean }) {
   );
 }
 
-/** Every run on disk, newest first, with its results. */
-function Runs({ runs, error }: { runs: RunSummary[]; error: string | null }) {
+type RunsProps = { runs: RunSummary[]; error: string | null; busy: boolean; onChange: () => void };
+
+/** Every run on disk, newest first, with its results and what can be done next. */
+function Runs({ runs, error, busy, onChange }: RunsProps) {
   return (
     <section className="card">
       <h2>Runs</h2>
@@ -188,28 +268,50 @@ function Runs({ runs, error }: { runs: RunSummary[]; error: string | null }) {
       {!error && runs.length === 0 && <p className="muted">No runs yet.</p>}
       <ul className="runs">
         {runs.map((run) => (
-          <RunItem key={run.name} run={run} />
+          <RunItem key={run.name} run={run} busy={busy} onChange={onChange} />
         ))}
       </ul>
     </section>
   );
 }
 
-function RunItem({ run }: { run: RunSummary }) {
+function RunItem({ run, busy, onChange }: { run: RunSummary; busy: boolean; onChange: () => void }) {
   const [watching, setWatching] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const { video, subtitles, shorts } = run.files;
   const facts = [run.channel, new Date(run.created).toLocaleString()];
   if (run.seconds != null) facts.push(formatSeconds(run.seconds));
+  const state = run.finished ? "dubbed" : run.waiting_for ? "waiting" : (run.done.at(-1) ?? "new");
+
+  async function act(action: () => Promise<unknown>) {
+    setError(null);
+    try {
+      await action();
+      onChange();
+    } catch (e) {
+      setError(message(e));
+    }
+  }
+
   return (
     <li>
       <div className="row">
         <strong>{run.name}</strong>
         <span className="muted">{facts.join(" · ")}</span>
-        <span className={`badge ${run.finished ? "done" : "partial"}`}>
-          {run.finished ? "dubbed" : (run.done.at(-1) ?? "new")}
-        </span>
+        <span className={`badge ${run.finished ? "done" : run.waiting_for ? "waiting" : "partial"}`}>{state}</span>
       </div>
       <div className="links">
+        {run.waiting_for && (
+          <button type="button" className="link" onClick={() => setReviewing(!reviewing)}>
+            {reviewing ? "Close" : waitingText(run)}
+          </button>
+        )}
+        {!run.finished && !run.waiting_for && (
+          <button type="button" className="link" disabled={busy} onClick={() => act(() => continueRun(run.name))}>
+            Continue
+          </button>
+        )}
         {video && (
           <>
             <button type="button" className="link" onClick={() => setWatching(!watching)}>
@@ -230,8 +332,134 @@ function RunItem({ run }: { run: RunSummary }) {
             {path.split("/").pop()}
           </a>
         ))}
+        {run.finished && !run.waiting_for && (
+          <>
+            <button type="button" className="link" disabled={busy} onClick={() => act(() => makeShorts(run.name, "dub"))}>
+              Make Shorts (dubbed)
+            </button>
+            <button
+              type="button"
+              className="link"
+              disabled={busy}
+              onClick={() => act(() => makeShorts(run.name, "original"))}
+            >
+              Make Shorts (original)
+            </button>
+          </>
+        )}
       </div>
+      {error && <p className="error">{error}</p>}
+      {reviewing && run.waiting_for && (
+        <ReviewPanel
+          run={run.name}
+          busy={busy}
+          onDone={() => {
+            setReviewing(false);
+            onChange();
+          }}
+        />
+      )}
       {watching && video && <video controls src={fileUrl(run.name, video)} />}
     </li>
+  );
+}
+
+/**
+ * The file a run waits for. Reviews are edited as text, as in the CLI; Shorts are picked with
+ * checkboxes (which edit the same text). "Approve and continue" marks it approved, saves it and
+ * continues the run.
+ */
+function ReviewPanel({ run, busy, onDone }: { run: string; busy: boolean; onDone: () => void }) {
+  const [review, setReview] = useState<Review | null>(null);
+  const [text, setText] = useState("");
+  const [asText, setAsText] = useState(false);
+  const [saved, setSaved] = useState(true);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getReview(run)
+      .then((r) => {
+        setReview(r);
+        setText(r.text);
+      })
+      .catch((e) => setError(message(e)));
+  }, [run]);
+
+  function edit(next: string) {
+    setText(next);
+    setSaved(false);
+  }
+
+  async function save(andContinue: boolean) {
+    setError(null);
+    setWorking(true);
+    try {
+      const final = andContinue ? approve(text) : text;
+      await saveReview(run, final);
+      setText(final);
+      setSaved(true);
+      if (andContinue) {
+        await continueRun(run);
+        onDone();
+      }
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  if (!review) return error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>;
+  const shorts = review.kind === "shorts";
+  const list = shorts ? candidates(text) : [];
+  const picked = list.filter((c) => c.picked).length;
+  return (
+    <div className="review">
+      <p className="muted">
+        <code>{review.file}</code>
+        {shorts
+          ? " · tick the Shorts to render (3 is a good number)."
+          : " · fix what's wrong; the comments at the top explain the format."}
+      </p>
+      {shorts && !asText ? (
+        <ul className="candidates">
+          {list.map((c) => (
+            <li key={c.line}>
+              <label className="check">
+                <input type="checkbox" checked={c.picked} onChange={() => edit(toggleCandidate(text, c.line))} />
+                <strong>
+                  {c.n}. {c.title}
+                </strong>
+                <span className="muted">{c.when}</span>
+              </label>
+              {c.details.map((d) => (
+                <div key={d} className="muted detail">
+                  {d}
+                </div>
+              ))}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <textarea value={text} onChange={(e) => edit(e.target.value)} rows={18} spellCheck={false} />
+      )}
+      {error && <p className="error">{error}</p>}
+      <div className="row">
+        <button type="button" disabled={working || busy || (shorts && picked === 0)} onClick={() => save(true)}>
+          {shorts ? `Render ${picked} Short${picked === 1 ? "" : "s"}` : "Approve and continue"}
+        </button>
+        {!shorts && (
+          <button type="button" className="secondary" disabled={working || saved} onClick={() => save(false)}>
+            {saved ? "Saved" : "Save for later"}
+          </button>
+        )}
+        {shorts && (
+          <button type="button" className="link" onClick={() => setAsText(!asText)}>
+            {asText ? "Show as a list" : "Edit as text (change cuts or titles)"}
+          </button>
+        )}
+      </div>
+    </div>
   );
 }

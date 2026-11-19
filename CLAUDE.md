@@ -90,9 +90,9 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 
 - **engine**: this Python package. Python only where the AI libraries need it.
 - **server**: Rust, axum + tokio, in `server/`. REST API over the runs folder, one GPU job at a time
-  (runs `localdub ... --json` with `tokio::process`), live progress to the browser, single user
-  with an access token on LAN/Tailscale, serves the UI and video files. **Ivan writes it**; guide
-  and review.
+  (runs `localdub ... --json` with `tokio::process`), live progress to the browser, serves the UI
+  and video files. Listens on 127.0.0.1; reached through an SSH tunnel (token auth only if LAN use
+  is wanted).
 - **web**: React + TypeScript (Vite) in `web/`. Runs list, new run, live progress, both reviews in the
   browser, voice-sample picker (listen and compare), Shorts timeline (AI candidates as markers,
   start/end handles snapped to sentence edges).
@@ -108,11 +108,13 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 3. Engine 0.7.0: talks to llama-swap only (router support dropped); `nemo.backend` /
    `demucs.backend` = `http` (default) | `local`. CT 103 switched to llama-swap Nov 12; first full
    run with Shorts worked (8.3 min, Ivan: Shorts "perfect").
-4. Server: done so far: health, runs list with files, POST /api/runs (validated, one at a time),
-   job + SSE progress, /files, serves the page, host allowlist. First page (`web/`): job panel,
-   new-run form (video path on the server), runs list with Watch/Download. Next: try it for real
-   on CT 103; then video upload, continuing a run after a review, reviews and Shorts picking in the
-   browser, model status (llama-swap /running), token auth.
+4. Server + page (Nov 19–20): runs list (files, what each waits for, worked out from disk), start
+   (validated, videos inside the home folder only), uploads (streamed, `<home>/videos`), reviews
+   (GET/PUT the waited-for file; *Approve and continue* sets `status: approved`), continue (after
+   a review/error, or `shorts --lang` for picked Shorts), make Shorts, job + SSE, /files, the page,
+   host + origin guard. Deploy package in `deploy/server/`. **Next: try it for real on CT 103**
+   (Ivan uses CT 103 for gaming at times; test when he says it's free). Later, only if wanted:
+   model status (llama-swap /running), token auth for LAN use (until then: SSH tunnel).
 5. App image (multi-stage) + docker compose; GPU-side services on CT 103.
 
 ## Backlog
@@ -142,6 +144,7 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
   wasn't the bottleneck; TTS (~30 s per round) and the checks are.
 - Server security (Nov 19): POST /runs validates name/channel (safe folder names, no leading `-`)
   and requires `video` to be an existing file; the server listens on 127.0.0.1 unless
-  LOCALDUB_LISTEN says otherwise, and answers only to its own Host names (DNS-rebinding guard;
-  more via LOCALDUB_ALLOWED_HOSTS; a Vite dev proxy needs `changeOrigin: true`). Before opening it
-  to the LAN: token auth; once uploads exist, restrict `video` to the uploads folder.
+  LOCALDUB_LISTEN says otherwise, answers only to its own Host names (DNS-rebinding guard; more via
+  LOCALDUB_ALLOWED_HOSTS) and refuses state changes whose Origin is another site or whose
+  Sec-Fetch-Site is cross-site (CSRF; the Vite dev proxy rewrites Host and Origin). Videos must be
+  inside the home folder. Before opening it to the LAN: token auth.
