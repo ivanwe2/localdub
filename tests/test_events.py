@@ -73,3 +73,21 @@ def test_result_status_from_exit_code(monkeypatch):
         result = json.loads(pipe.written.splitlines()[-1])
         assert result["event"] == "result" and result["status"] == status and result["exit_code"] == code
         assert result["run"] == "market" and result["waiting_for"]["kind"] == "review1"
+
+
+def test_a_voice_clones_length_comes_from_its_wav_header():
+    import io
+    import wave
+
+    from localdub.llm import wav_seconds
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(24000)
+        w.writeframes(b"\0\0" * 36000)  # 1.5 s
+    data = buf.getvalue()
+    assert wav_seconds(data) == 1.5
+    streamed = data[:40] + b"\xff\xff\xff\xff" + data[44:]  # a streamed WAV doesn't know its size up front
+    assert wav_seconds(streamed) == 1.5
+    assert wav_seconds(b"not audio") is None

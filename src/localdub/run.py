@@ -336,7 +336,8 @@ def clone_tests(run: Run, ctx: Ctx, sample: Path, lines: list[str]) -> list[str]
         if not trim.exists():
             sample_b64 = sample_b64 or base64.b64encode(sample.read_bytes()).decode()
             raw = trim.with_suffix(".raw.wav")
-            raw.write_bytes(ctx.server.tts(ctx.settings["tts_model"], line, lang, sample_b64, 42))
+            raw.write_bytes(ctx.server.tts(ctx.settings["tts_model"], line, lang, sample_b64, 42,
+                                           label=f"test sentence {i} from {sample.stem}"))
             media.trim_silence(raw, trim, RATE)
             raw.unlink()
         out.append(rel)
@@ -508,6 +509,10 @@ def stage_translate(run: Run, ctx: Ctx):
     def save():
         write_json(partial, {str(s["id"]): {"src": s["src"], "tgt": s["tgt"]}
                              for s in segs if s.get("tgt") and s["tgt"] != "[MISSING]"})
+        done_lines = [s for s in segs if s.get("tgt")]
+        events.emit("progress", stage="translate", label="translating", done=len(done_lines), total=len(segs),
+                    line=done_lines[-1]["id"] if done_lines else None,
+                    at=done_lines[-1]["end"] if done_lines else None)
 
     translate(segs, ctx.server, ctx.settings, ctx.profile, progress=save)
     run.segs = segs

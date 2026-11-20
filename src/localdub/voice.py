@@ -22,7 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import languages, media
+from . import events, languages, media
 
 from .asr import transcribe_folder
 
@@ -218,19 +218,23 @@ def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedde
             shutil.rmtree(check_dir)
         check_dir.mkdir()
         new, to_check = 0, []
-        for s in pending:
+        for n, s in enumerate(pending, start=1):
             name = take_name(s, seed)
             raw, trim = work / "raw" / f"{name}.wav", work / "trim" / f"{name}.wav"
             if not raw.exists():
-                raw.write_bytes(server.tts(settings["tts_model"], s["tgt"], lang, ref_b64, seed))
+                raw.write_bytes(server.tts(settings["tts_model"], s["tgt"], lang, ref_b64, seed,
+                                           label=f"line {s['id']}, take {round_no}"))
                 new += 1
             if name not in checks or not trim.exists():
                 media.trim_silence(raw, trim, RATE)
                 media.ffmpeg("-i", trim, "-ac", "1", "-ar", 16000, "-c:a", "pcm_s16le", check_dir / f"{name}.wav")
                 to_check.append(name)
+            events.emit("progress", stage="voice", label=f"voicing, take {round_no}", done=n, total=len(pending),
+                        line=s["id"], at=s["start"])
         print(f"   take {round_no} (seed {seed}): {len(pending)} lines, {new} newly voiced in "
               f"{time.monotonic() - t0:.0f}s, checking {len(to_check)}", file=sys.stderr)
         if to_check:
+            events.emit("progress", stage="voice", label=f"checking take {round_no}", done=0, total=len(to_check))
             nemo = settings["nemo"]
             got = transcribe_folder(settings, server, check_dir, work / f"check-{round_no}-out", lang,
                                     nemo["check_device"])

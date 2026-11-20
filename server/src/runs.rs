@@ -30,6 +30,8 @@ pub struct RunSummary {
     pub seconds: Option<f64>,
     /// The stages finished so far, in order.
     pub done: Vec<String>,
+    /// How long each finished stage took, in seconds (a review: how long it waited for you).
+    pub timings: BTreeMap<String, f64>,
     /// The dubbed video is ready: the mix stage is done.
     pub finished: bool,
     /// The run's results so far.
@@ -70,6 +72,8 @@ struct StateFile {
     created: String,
     done: Vec<String>,
     seconds: Option<f64>,
+    #[serde(default)]
+    timings: BTreeMap<String, f64>,
     #[serde(default)]
     outputs: Outputs,
     /// Language ("dub" / "original") → the Shorts' paths.
@@ -168,6 +172,7 @@ async fn read_summary(dir: &Path, name: String) -> std::io::Result<Option<RunSum
         source: state.source,
         seconds: state.seconds,
         done: state.done,
+        timings: state.timings,
         finished,
         files,
         waiting_for,
@@ -266,6 +271,7 @@ mod tests {
                     source: "/videos/talk.mp4".into(),
                     seconds: Some(120.0),
                     done: strings(&["prep"]),
+                    timings: BTreeMap::from([("prep".to_string(), 0.3)]),
                     finished: false,
                     files: RunFiles::default(),
                     waiting_for: None,
@@ -286,6 +292,10 @@ mod tests {
                         "review2",
                         "voice",
                         "mix",
+                    ]),
+                    timings: BTreeMap::from([
+                        ("prep".to_string(), 0.4),
+                        ("voice".to_string(), 105.2),
                     ]),
                     finished: true,
                     files: RunFiles {

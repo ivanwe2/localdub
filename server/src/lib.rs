@@ -13,6 +13,7 @@ pub mod start;
 pub mod status;
 pub mod videos;
 pub mod voice;
+pub mod waveform;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -329,6 +330,22 @@ async fn revoice(
     Ok((StatusCode::ACCEPTED, Json(job)))
 }
 
+/// GET /api/runs/{name}/waveform: how loud the speaker's voice and the music are along the video,
+/// for the timeline (null tracks before the separation stage).
+async fn get_waveform(
+    State(state): State<AppState>,
+    UrlPath(name): UrlPath<String>,
+) -> Result<Json<waveform::Waveform>, Failure> {
+    find_run(&state, &name).await?;
+    let dir = state.home.join("runs").join(&name);
+    // reading the WAVs is plain blocking file I/O: on a thread meant for it (C#: Task.Run)
+    let wave = tokio::task::spawn_blocking(move || waveform::of_run(&dir))
+        .await
+        .map_err(server_error)?
+        .map_err(server_error)?;
+    Ok(Json(wave))
+}
+
 /// What a run waits for, with the text of the file to edit.
 #[derive(Serialize)]
 struct Review {
@@ -637,6 +654,7 @@ pub fn app(state: AppState) -> Router {
         )
         .route("/runs/{name}/voice/pick", post(pick_voice))
         .route("/runs/{name}/revoice", post(revoice))
+        .route("/runs/{name}/waveform", get(get_waveform))
         .route("/channels", get(get_channels))
         .route("/languages", get(get_languages))
         .route("/videos", get(list_videos))
@@ -1312,6 +1330,23 @@ mod tests {
             job["waiting_for"]["kind"], "shorts",
             "the engine ran `shorts`: {job}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_runs_waveform_is_there_once_it_is_separated() {
+        let home = tempfile::tempdir().unwrap();
+        let state = test_state(home.path());
+        make_run(&state, "early", &["prep"], &[]);
+
+        let (status, wave) = get_json(app(state.clone()), "/api/runs/early/waveform").await;
+        let (missing, _) = get_json(app(state), "/api/runs/nobody/waveform").await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            wave,
+            json!({"seconds": null, "speech": null, "music": null})
+        );
+        assert_eq!(missing, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
