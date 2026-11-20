@@ -2,7 +2,8 @@
 # Updates everything localdub on this machine to the latest on GitHub, as root:
 #   bash ~/localdub/deploy/update.sh            (add --force to update even while a run is going)
 # 1. the engine: git pull of ~/localdub and reinstall into its venv (deploy/install.sh)
-# 2. the web app: the latest build from the GitHub release "app" (made by CI on every merge to main),
+# 2. yt-dlp, for downloads from links: installed, or updated (sites change, old versions stop working)
+# 3. the web app: the latest build from the GitHub release "app" (made by CI on every merge to main),
 #    installed with its install.sh, unless that build is installed already
 #
 # Everything is inside main(), so bash has read the whole script before step 1's git pull can
@@ -17,6 +18,9 @@ main() {
 
   echo "== the engine"
   bash "$here/install.sh"
+
+  echo "== yt-dlp"
+  bash "$here/server/yt-dlp.sh" || echo "note: yt-dlp couldn't be installed or updated; downloads from links may fail" >&2
 
   echo "== the web app"
   tmp=$(mktemp -d)

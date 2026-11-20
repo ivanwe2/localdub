@@ -12,6 +12,8 @@ Environment=LOCALDUB_ENGINE=/usr/local/bin/localdub
 Environment=LOCALDUB_WEB=/opt/localdub/web
 Environment=LOCALDUB_LISTEN=127.0.0.1:8080
 Environment=LOCALDUB_MODELS_URL=http://127.0.0.1:9876
+# downloads from links (installed by yt-dlp.sh, with Deno beside it in /usr/local/bin)
+Environment=LOCALDUB_YTDLP=/usr/local/bin/yt-dlp
 # LLAMA_API_KEY, for the models' status (the engine also reads this file itself)
 EnvironmentFile=-/etc/llama.env
 Environment=HOME=/root
