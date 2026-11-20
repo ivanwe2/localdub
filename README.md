@@ -77,10 +77,13 @@ localdub channel NAME [--speaker man|woman|none] a channel's settings
 
 A channel dubs from one language into another, set on its first run (`--from bg --to en`) and fixed
 after that, because what it learns (spellings, glossary, approved lines) belongs to that pair. The
-video can be in any language in `localdub languages` that Nemotron transcribes and that has a
-hunspell dictionary (English, German, French, Italian, Portuguese, Spanish, Russian, Bulgarian,
-Dutch, Polish, Ukrainian, Romanian, Czech, Swedish); the dub can be in any the voice model speaks
-(setting `tts_languages`: en, de, fr, it, pt, es, ru). For gendered languages (Spanish, Russian,
+video can be in any of the 26 languages in `localdub languages`, the European ones Nemotron
+transcribes (English, German, French, Italian, Portuguese, Spanish, Russian, Bulgarian, Dutch,
+Polish, Ukrainian, Romanian, Czech, Swedish, Turkish, Norwegian, Danish, Finnish, Croatian, Slovak,
+Hungarian, Estonian, Greek, Lithuanian, Latvian, Slovenian; Finnish without a spelling check, as
+Debian has no hunspell dictionary for it); the dub can be in any the voice model speaks (setting
+`tts_languages`: en, de, fr, it, pt, es, ru; Qwen3-TTS also speaks Chinese, Japanese and Korean,
+which need their own sentence and caption rules first). For gendered languages (Spanish, Russian,
 German…) `--speaker man|woman` lets the translation get first-person forms right ("I was tired");
 nothing else uses it.
 
@@ -138,8 +141,9 @@ Built and run on a Proxmox LXC with 2× RTX 5060 Ti 16 GB; a 30-minute video tak
   starts and stops them as requests need them. See [deploy/gpu/README.md](deploy/gpu/README.md).
 - Where localdub runs: Python ≥ 3.10, **ffmpeg** with libass, **hunspell** with the dictionary of each
   channel's video language (`localdub languages --apt de` names the Debian packages; `deploy/install.sh`
-  installs the ones its channels need, plus `LANGS="de fr"` for new ones; a run without its dictionary
-  stops before any GPU work and says what to install), **DejaVu Sans**; for picking the voice by
+  installs every language's, about 85 MB in all, or `LANGS="de fr"` only those plus the channels'; a
+  run without its dictionary stops before any GPU work, makes no channel, and says what to install),
+  **DejaVu Sans**; for picking the voice by
   likeness also `transformers` (`.[voice]`, CPU).
 
 Settings: create `~/dub/settings.json` with just the keys that differ from `src/localdub/settings.py`,

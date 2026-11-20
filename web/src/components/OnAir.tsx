@@ -116,6 +116,16 @@ export default function OnAir({ name, run, job, channels, busy, onChange, backTo
         </button>
       </div>
     );
+  } else if (job?.state === "failed" && !run) {
+    // it stopped before the run was made (a missing dictionary, a video it can't read): nothing to continue
+    status = (
+      <div className="row">
+        <span className="error">{job.error}</span>
+        <a className="btn" href="#/new">
+          Fix it, then start it again
+        </a>
+      </div>
+    );
   } else if (job?.state === "failed" || (run && !run.finished && !running)) {
     status = (
       <div className="row">

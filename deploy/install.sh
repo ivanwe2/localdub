@@ -24,13 +24,22 @@ if [ -d "$DIR/.git" ]; then git -C "$DIR" pull --ff-only; else git clone "$REPO"
 ln -sf "$VENV/bin/localdub" /usr/local/bin/localdub
 mkdir -p ~/dub
 
-# spelling dictionaries: the source language of every channel here, plus LANGS for channels to come
-# (e.g. LANGS="de fr" bash install.sh); localdub knows which Debian package has which dictionary
-packages=$(localdub languages --apt ${LANGS:-})
+# spelling dictionaries: every language localdub knows (a few MB each), so any new channel works at
+# once; LANGS="de fr" bash install.sh installs only those (plus every channel's video language).
+# localdub knows which Debian package has which dictionary. One package at a time: one that this
+# system doesn't have can't stop the others.
+packages=$(localdub languages --apt ${LANGS:-all})
 dicts=()
 for pkg in $packages; do dpkg -s "$pkg" >/dev/null 2>&1 || dicts+=("$pkg"); done
-if [ ${#dicts[@]} -gt 0 ]; then apt-get update -q && apt-get install -y -q "${dicts[@]}"; fi
+missing=()
+if [ ${#dicts[@]} -gt 0 ]; then
+  apt-get update -q
+  for pkg in "${dicts[@]}"; do apt-get install -y -q "$pkg" || missing+=("$pkg"); done
+fi
 echo "Installed: $(localdub --version)"
 packages=$(echo $packages)  # one line
-echo "Spelling dictionaries: ${packages:-none yet (no channels)}"
+echo "Spelling dictionaries: ${packages:-none}"
+if [ ${#missing[@]} -gt 0 ]; then
+  echo "note: couldn't install ${missing[*]}; those languages' runs stop until it is (apt-get install ...)" >&2
+fi
 echo "Next: localdub check"

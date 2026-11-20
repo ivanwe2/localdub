@@ -685,9 +685,10 @@ def default_name(src: Path, start, length) -> str:
     return name
 
 
-def channel_profile(name: str, args, settings: dict) -> Profile | str:
+def channel_profile(name: str, args, settings: dict, need_dictionary: bool = False) -> Profile | str:
     """The channel's profile for this run, or why it can't be used. A new channel gets its languages
-    (and speaker) from --from/--to/--speaker; an existing one must not be given others."""
+    (and speaker) from --from/--to/--speaker; an existing one must not be given others. With
+    `need_dictionary`, a new channel whose spelling dictionary is missing isn't made at all."""
     profile = Profile(name)
     if profile.is_new:
         if not (args.source and args.target):
@@ -697,6 +698,8 @@ def channel_profile(name: str, args, settings: dict) -> Profile | str:
             profile.set_languages(args.source, args.target, settings)
         except ValueError as e:
             return str(e)
+        if need_dictionary and (missing := missing_dictionary(profile)):
+            return missing  # before it's saved: a new try may choose other languages
         profile["speaker"] = args.speaker or ""
         profile.save()
         log(f"localdub: new channel '{name}': {profile['source_language_name']} → {profile['target_language_name']}")
@@ -725,7 +728,7 @@ def cmd_run(args) -> int:
         if not run.state:
             if not args.channel:
                 return fail("a new run needs --channel NAME (the channel whose profile it uses and teaches)")
-            checked = channel_profile(args.channel, args, settings)  # before the run exists: fail cleanly
+            checked = channel_profile(args.channel, args, settings, need_dictionary=True)  # before the run exists
             if isinstance(checked, str):
                 return fail(checked)
             if missing := missing_dictionary(checked):
@@ -1069,7 +1072,8 @@ def cmd_channel(args) -> int:
 def cmd_languages(args) -> int:
     settings = load_settings()
     if args.apt is not None:  # for scripts: the dictionary packages to install, on stdout
-        codes = set(args.apt) | {Profile(name)["source_lang"] for name in channel_names()}
+        codes = set(languages.LANGUAGES) if "all" in args.apt else set(args.apt)
+        codes |= {Profile(name)["source_lang"] for name in channel_names()}
         packages = set()
         for code in codes:
             try:
@@ -1131,8 +1135,8 @@ def main(argv=None) -> int:
     c.add_argument("--speaker", choices=["man", "woman", "none"], help="set who speaks ('none' = not set)")
     lg = sub.add_parser("languages", parents=[common], help="the languages localdub knows and can dub into")
     lg.add_argument("--apt", nargs="*", metavar="LANG",
-                    help="instead: print the Debian packages with the dictionaries for these languages and "
-                         "for every channel's video language (for install scripts)")
+                    help="instead: print the Debian packages with the dictionaries for these languages ('all': "
+                         "every language) and for every channel's video language (for install scripts)")
     args = ap.parse_args(argv)
     events.configure(args.json)
     try:
