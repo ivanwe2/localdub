@@ -201,9 +201,12 @@ proxy) can go into `/etc/yt-dlp.conf`. Download only videos you have the rights 
 In the page you upload a video, download one from a link (YouTube and the other sites yt-dlp
 knows; it lands in the videos folder as `yt-<id>-<title>.mp4`, up to 1080p, and runs beside a dub;
 links to other pages or files, and into the machine or the local network, are refused),
-or give a path inside the home folder; then start a run, follow it live, do the reviews (edit the
-text, *Approve and continue*), make and pick Shorts (tick them, *Render*), and watch or download the
-results.
+or give a path inside the home folder; then start a run and follow it live: the run on air is shown
+as editing-timeline tracks (the speaker's voice, both texts, the dub as it is voiced, the music),
+with its stages, clocks, the AI's speed on LED meters, and the GPUs. The reviews are edited line by
+line (one-click fixes for names and spellings, character budgets, the glossary; or as text), voices
+are compared by ear and by score, and Shorts are picked on a timeline of the whole video with a 9:16
+preview, their cuts moved a sentence at a time. Dark or light, following the system.
 
 The API:
 

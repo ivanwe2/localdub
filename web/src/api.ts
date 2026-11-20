@@ -3,7 +3,7 @@
 export type JobState = "running" | "done" | "waiting" | "failed";
 
 export interface WaitingFor {
-  kind: string; // "review1", "review2" or "shorts"
+  kind: string; // "review1", "review2", "voice" or "shorts"
   file: string;
 }
 
@@ -32,6 +32,21 @@ export interface Job {
   error: string | null;
   calls: Call[]; // the latest model requests, oldest first
   log: string[]; // the engine's latest messages, oldest first
+  started_ms: number; // ms since 1970, like Date.now()
+  ended_ms: number | null;
+  stage_started_ms: number | null;
+  timings: Record<string, number>; // seconds per stage finished in this job
+  progress: Progress | null; // how far the current stage is, line by line
+}
+
+/** How far a stage that works line by line is; `at` is where that line is in the video. */
+export interface Progress {
+  stage: string;
+  label: string | null;
+  done: number;
+  total: number;
+  line: number | null;
+  at: number | null;
 }
 
 /** A model llama-swap has running. */
@@ -83,9 +98,50 @@ export interface RunSummary {
   source: string;
   seconds: number | null;
   done: string[];
+  timings: Record<string, number>; // seconds per finished stage
   finished: boolean;
   files: RunFiles;
   waiting_for: Waiting | null;
+}
+
+/** How loud the speaker's voice and the music are along the video: 0–100 per step. */
+export interface Waveform {
+  seconds: number | null;
+  speech: number[] | null;
+  music: number[] | null;
+}
+
+export async function getWaveform(run: string): Promise<Waveform> {
+  return (await check(await fetch(`${runPath(run)}/waveform`))).json();
+}
+
+/** One line of a run: where it is in the video, the original text and (once translated) the dub's. */
+export interface Segment {
+  id: number;
+  start: number;
+  end: number;
+  src: string;
+  tgt: string | null;
+}
+
+/**
+ * The run's lines, once it is transcribed (segments.json, or spelled.json before review 1); []
+ * before. Runs from before 0.9.0 keep their text under "bg"/"en".
+ */
+export async function getSegments(run: string): Promise<Segment[]> {
+  for (const file of ["segments.json", "spelled.json"]) {
+    const response = await fetch(fileUrl(run, file));
+    if (!response.ok) continue;
+    const raw: Record<string, unknown>[] = await response.json();
+    return raw.map((s) => ({
+      id: Number(s.id),
+      start: Number(s.start),
+      end: Number(s.end),
+      src: String(s.src ?? s.bg ?? ""),
+      tgt: typeof (s.tgt ?? s.en) === "string" ? String(s.tgt ?? s.en) : null,
+    }));
+  }
+  return [];
 }
 
 /** The file a run waits for, with its text. */
