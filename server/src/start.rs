@@ -176,6 +176,31 @@ pub fn continue_args(run: &str) -> Vec<String> {
     vec!["run".to_string(), run.to_string()]
 }
 
+/// Making voice samples from a run's speech to compare: `voice <name>`.
+pub fn voice_args(run: &str) -> Vec<String> {
+    vec!["voice".to_string(), run.to_string()]
+}
+
+/// Making one of them (or "current") the channel's voice: `voice <name> --pick <pick>`.
+pub fn pick_args(run: &str, pick: &str) -> Vec<String> {
+    vec![
+        "voice".to_string(),
+        run.to_string(),
+        "--pick".to_string(),
+        pick.to_string(),
+    ]
+}
+
+/// Dubbing a finished run again with the channel's (new) voice: `run <name> --redo voice`.
+pub fn revoice_args(run: &str) -> Vec<String> {
+    vec![
+        "run".to_string(),
+        run.to_string(),
+        "--redo".to_string(),
+        "voice".to_string(),
+    ]
+}
+
 /// Making (or, once picked, rendering) a finished run's Shorts: `shorts <name> --lang <lang>`.
 pub fn shorts_args(run: &str, lang: &str) -> Vec<String> {
     vec![
@@ -247,6 +272,13 @@ mod tests {
             shorts_args("market", ShortsLang::Original.as_str()),
             ["shorts", "market", "--lang", "original"]
         );
+    }
+
+    #[test]
+    fn voice_samples_picks_and_dubbing_again() {
+        assert_eq!(voice_args("market"), ["voice", "market"]);
+        assert_eq!(pick_args("market", "2"), ["voice", "market", "--pick", "2"]);
+        assert_eq!(revoice_args("market"), ["run", "market", "--redo", "voice"]);
     }
 
     #[test]

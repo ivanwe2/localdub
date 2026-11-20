@@ -17,6 +17,17 @@ if [ "$1" = "languages" ]; then
   exit 0
 fi
 
+# `voice <run>`: voice samples to compare, then it waits for a pick; `voice <run> --pick N`: picked
+if [ "$1" = "voice" ]; then
+  echo "{\"event\": \"start\", \"command\": \"voice\", \"run\": \"$2\", \"channel\": \"c\", \"dir\": \"/tmp/runs/$2\"}"
+  if [ "$3" = "--pick" ]; then
+    echo "{\"event\": \"result\", \"status\": \"done\", \"exit_code\": 0, \"run\": \"$2\", \"voice\": \"$2, candidate $4\"}"
+    exit 0
+  fi
+  echo "{\"event\": \"result\", \"status\": \"waiting\", \"exit_code\": 3, \"run\": \"$2\", \"waiting_for\": {\"kind\": \"voice\", \"file\": \"/tmp/runs/$2/voice-candidates.json\"}}"
+  exit 3
+fi
+
 # `shorts <run> --lang <lang>`: proposes candidates and stops for you to pick them
 if [ "$1" = "shorts" ]; then
   echo "{\"event\": \"start\", \"command\": \"shorts\", \"run\": \"$2\", \"channel\": \"c\", \"dir\": \"/tmp/runs/$2\", \"lang\": \"$4\"}"

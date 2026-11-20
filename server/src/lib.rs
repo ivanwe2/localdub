@@ -10,6 +10,7 @@ pub mod runner;
 pub mod runs;
 pub mod start;
 pub mod status;
+pub mod voice;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -35,6 +36,7 @@ use crate::job::{Job, JobState};
 use crate::runs::{RunSummary, Waiting};
 use crate::start::{ShortsRequest, StartRequest};
 use crate::status::{ModelServer, Status};
+use crate::voice::{PickRequest, VoiceSamples};
 
 /// An error answer: a status code and a plain-text reason the page can show as it is.
 type Failure = (StatusCode, String);
@@ -215,6 +217,10 @@ async fn continue_run(
             lang: Some(lang),
             ..
         }) if kind == "shorts" => start::shorts_args(&name, lang),
+        Some(Waiting { kind, .. }) if kind == "voice" && run.finished => {
+            let msg = format!("'{name}' waits for a voice to be picked, not to be continued");
+            return Err((StatusCode::CONFLICT, msg));
+        }
         _ if !run.finished => start::continue_args(&name),
         _ => {
             let msg = format!("'{name}' is finished and waits for nothing");
@@ -237,6 +243,72 @@ async fn make_shorts(
         return Err((StatusCode::CONFLICT, msg));
     }
     let job = launch(&state, &name, start::shorts_args(&name, req.lang.as_str()))?;
+    Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
+/// POST /api/runs/{name}/voice: makes voice samples from the run's speech to compare with the
+/// channel's voice now (`localdub voice <name>`: test sentences cloned from each, scored); the run
+/// then waits for a pick. It needs the run transcribed.
+async fn make_voice_samples(
+    State(state): State<AppState>,
+    UrlPath(name): UrlPath<String>,
+) -> Result<(StatusCode, Json<Job>), Failure> {
+    let run = find_run(&state, &name).await?;
+    if !run.done.iter().any(|stage| stage == "spelling") {
+        let msg = format!("'{name}' isn't transcribed yet; voice samples come from its speech");
+        return Err((StatusCode::CONFLICT, msg));
+    }
+    let job = launch(&state, &name, start::voice_args(&name))?;
+    Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
+/// GET /api/runs/{name}/voice: the run's voice samples (paths relative to the run, for /files),
+/// or 404 if it has none yet.
+async fn get_voice_samples(
+    State(state): State<AppState>,
+    UrlPath(name): UrlPath<String>,
+) -> Result<Json<VoiceSamples>, Failure> {
+    find_run(&state, &name).await?;
+    let dir = state.home.join("runs").join(&name);
+    let samples = voice::read_samples(&dir).await.map_err(server_error)?;
+    let not_yet = || {
+        (
+            StatusCode::NOT_FOUND,
+            format!("'{name}' has no voice samples yet"),
+        )
+    };
+    samples.map(Json).ok_or_else(not_yet)
+}
+
+/// POST /api/runs/{name}/voice/pick `{"pick": 2}` or `{"pick": "current"}`: makes that sample the
+/// channel's voice (`localdub voice <name> --pick ..`). New runs use it; /revoice re-dubs this one.
+async fn pick_voice(
+    State(state): State<AppState>,
+    UrlPath(name): UrlPath<String>,
+    Json(req): Json<PickRequest>,
+) -> Result<(StatusCode, Json<Job>), Failure> {
+    find_run(&state, &name).await?;
+    let pick = req
+        .pick
+        .as_arg()
+        .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e))?;
+    let job = launch(&state, &name, start::pick_args(&name, &pick))?;
+    Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
+/// POST /api/runs/{name}/revoice: dubs a finished run again with the channel's voice
+/// (`localdub run <name> --redo voice`). An unfinished run uses the new voice anyway.
+async fn revoice(
+    State(state): State<AppState>,
+    UrlPath(name): UrlPath<String>,
+) -> Result<(StatusCode, Json<Job>), Failure> {
+    let run = find_run(&state, &name).await?;
+    if !run.finished {
+        let msg =
+            format!("'{name}' isn't dubbed yet; it uses the channel's voice when it gets there");
+        return Err((StatusCode::CONFLICT, msg));
+    }
+    let job = launch(&state, &name, start::revoice_args(&name))?;
     Ok((StatusCode::ACCEPTED, Json(job)))
 }
 
@@ -466,7 +538,7 @@ async fn job_events(
 }
 
 /// The whole server:
-/// - `/api/...` the JSON API: health, runs (start, continue, review, Shorts), channels, languages,
+/// - `/api/...` the JSON API: health, runs (start, continue, review, voice samples, Shorts), channels, languages,
 ///   uploads, the job, the models' and GPUs' status
 /// - `/files/<run>/<path>` a run's files, e.g. the dubbed video (ServeDir also answers range
 ///   requests, so the browser can seek in a video, and never serves anything outside runs/)
@@ -478,6 +550,12 @@ pub fn app(state: AppState) -> Router {
         .route("/runs/{name}/continue", post(continue_run))
         .route("/runs/{name}/shorts", post(make_shorts))
         .route("/runs/{name}/review", get(get_review).put(put_review))
+        .route(
+            "/runs/{name}/voice",
+            get(get_voice_samples).post(make_voice_samples),
+        )
+        .route("/runs/{name}/voice/pick", post(pick_voice))
+        .route("/runs/{name}/revoice", post(revoice))
         .route("/channels", get(get_channels))
         .route("/languages", get(get_languages))
         .route("/videos", get(list_videos))
@@ -1029,6 +1107,94 @@ mod tests {
         let job = job_when_settled(&state).await;
         assert_eq!(job["state"], "waiting");
         assert_eq!(job["waiting_for"]["kind"], "shorts");
+    }
+
+    const SAMPLES: &str = r#"{"version": 2, "lang": "en", "lines": ["Hi everyone."], "scored": false,
+        "candidates": [{"n": 1, "start": 10.0, "end": 22.0, "sim": null, "path": "voice-candidates/candidate-1.wav",
+                        "tests": ["voice-candidates/test-ab-1.wav"]}],
+        "current": null, "picked": null}"#;
+
+    #[tokio::test]
+    async fn voice_samples_are_made_shown_and_picked() {
+        let home = tempfile::tempdir().unwrap();
+        let state = test_state(home.path());
+        make_run(&state, "market", BEFORE_REVIEW1, &[]);
+
+        let (none_yet, _) = get_json(app(state.clone()), "/api/runs/market/voice").await;
+        let (made, _) = post_json(app(state.clone()), "/api/runs/market/voice", json!({})).await;
+        let job = job_when_settled(&state).await;
+        make_run(
+            &state,
+            "market",
+            BEFORE_REVIEW1,
+            &[("voice-candidates.json", SAMPLES)],
+        );
+        let (shown, samples) = get_json(app(state.clone()), "/api/runs/market/voice").await;
+        let (_, runs) = get_json(app(state.clone()), "/api/runs").await;
+        let (picked, _) = post_json(
+            app(state.clone()),
+            "/api/runs/market/voice/pick",
+            json!({"pick": 1}),
+        )
+        .await;
+        let picked_job = job_when_settled(&state).await;
+
+        assert_eq!(none_yet, StatusCode::NOT_FOUND);
+        assert_eq!(made, StatusCode::ACCEPTED);
+        assert_eq!(
+            (&job["state"], &job["waiting_for"]["kind"]),
+            (&json!("waiting"), &json!("voice"))
+        );
+        assert_eq!(shown, StatusCode::OK);
+        assert_eq!(
+            samples["candidates"][0]["tests"][0],
+            "voice-candidates/test-ab-1.wav"
+        );
+        assert_eq!(runs[0]["waiting_for"]["kind"], "voice");
+        assert_eq!(picked, StatusCode::ACCEPTED);
+        assert_eq!(picked_job["state"], "done");
+    }
+
+    #[tokio::test]
+    async fn voice_samples_need_a_transcribed_run_and_a_sensible_pick() {
+        let home = tempfile::tempdir().unwrap();
+        let state = test_state(home.path());
+        make_run(&state, "early", &["prep"], &[]);
+
+        let (early, _) = post_json(app(state.clone()), "/api/runs/early/voice", json!({})).await;
+        assert_eq!(early, StatusCode::CONFLICT);
+        for pick in [json!({"pick": 0}), json!({"pick": "--help"}), json!({})] {
+            let (status, _) = post_json(
+                app(state.clone()),
+                "/api/runs/early/voice/pick",
+                pick.clone(),
+            )
+            .await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{pick}");
+        }
+        let (missing, _) = post_json(
+            app(state),
+            "/api/runs/nobody/voice/pick",
+            json!({"pick": 1}),
+        )
+        .await;
+        assert_eq!(missing, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn only_a_finished_run_is_dubbed_again_with_the_new_voice() {
+        let home = tempfile::tempdir().unwrap();
+        let state = test_state(home.path());
+        make_run(&state, "half", BEFORE_REVIEW1, &[]);
+        make_run(&state, "done-run", FINISHED, &[]);
+
+        let (half, _) = post_json(app(state.clone()), "/api/runs/half/revoice", json!({})).await;
+        let (finished, _) =
+            post_json(app(state.clone()), "/api/runs/done-run/revoice", json!({})).await;
+
+        assert_eq!(half, StatusCode::CONFLICT);
+        assert_eq!(finished, StatusCode::ACCEPTED);
+        assert_eq!(job_when_settled(&state).await["state"], "done");
     }
 
     #[tokio::test]
