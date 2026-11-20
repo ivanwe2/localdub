@@ -1,9 +1,19 @@
 //! The job: the one engine run the server is doing (or did last), as the browser will see it.
 //! It starts as "running" and is updated from the engine's events as they arrive (runner.rs).
 
+use std::collections::BTreeMap;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use serde::Serialize;
 
-use crate::events::{Call, Event, ResultStatus, StageStatus, WaitingFor};
+use crate::events::{Call, Event, Progress, ResultStatus, StageStatus, WaitingFor};
+
+/// Now, in milliseconds since 1970 (what JavaScript's Date.now() gives, so the page can compare).
+pub fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
+}
 
 /// How many of the latest model calls and log lines a job keeps for the page.
 pub const KEEP_CALLS: usize = 40;
@@ -41,6 +51,14 @@ pub struct Job {
     pub calls: Vec<Call>,
     /// The engine's latest messages for people (its stderr), oldest first (at most KEEP_LOG).
     pub log: Vec<String>,
+    /// When the job started and ended, and when the current stage started (ms since 1970).
+    pub started_ms: u64,
+    pub ended_ms: Option<u64>,
+    pub stage_started_ms: Option<u64>,
+    /// How long each stage finished in this job took, in seconds.
+    pub timings: BTreeMap<String, f64>,
+    /// How far the current stage is, if it works line by line.
+    pub progress: Option<Progress>,
 }
 
 impl Job {
@@ -56,6 +74,11 @@ impl Job {
             error: None,
             calls: Vec::new(),
             log: Vec::new(),
+            started_ms: now_ms(),
+            ended_ms: None,
+            stage_started_ms: None,
+            timings: BTreeMap::new(),
+            progress: None,
         }
     }
 
@@ -75,7 +98,16 @@ impl Job {
             }
             Event::Stage {
                 stage,
-                status: StageStatus::Started | StageStatus::Waiting,
+                status: StageStatus::Started,
+                ..
+            } => {
+                self.current = Some(stage);
+                self.stage_started_ms = Some(now_ms());
+                self.progress = None;
+            }
+            Event::Stage {
+                stage,
+                status: StageStatus::Waiting,
                 ..
             } => {
                 self.current = Some(stage);
@@ -83,11 +115,17 @@ impl Job {
             Event::Stage {
                 stage,
                 status: StageStatus::Done,
-                ..
+                seconds,
             } => {
+                if let Some(seconds) = seconds {
+                    self.timings.insert(stage.clone(), seconds);
+                }
                 self.done.push(stage);
                 self.current = None;
+                self.stage_started_ms = None;
+                self.progress = None;
             }
+            Event::Progress(progress) => self.progress = Some(progress),
             Event::Result {
                 status,
                 waiting_for,
@@ -101,6 +139,7 @@ impl Job {
                 };
                 self.waiting_for = waiting_for;
                 self.error = error;
+                self.ended_ms = Some(now_ms());
             }
             Event::Call(call) => keep_last(&mut self.calls, call, KEEP_CALLS),
             Event::Languages { .. } | Event::Other => {} // nothing a run's progress shows
@@ -111,10 +150,12 @@ impl Job {
     pub fn fail(&mut self, error: String) {
         self.state = JobState::Failed;
         self.error = Some(error);
+        self.ended_ms.get_or_insert_with(now_ms);
     }
 
     /// The engine has exited. If it never sent a result (e.g. it crashed), the job failed.
     pub fn finish(&mut self, exit_code: i32) {
+        self.ended_ms.get_or_insert_with(now_ms);
         if self.state == JobState::Running {
             self.state = JobState::Failed;
             self.error = Some(format!(
@@ -200,6 +241,36 @@ mod tests {
             JobState::Running,
             "calls and log lines don't change the state"
         );
+    }
+
+    #[test]
+    fn the_job_keeps_its_times_stage_timings_and_progress() {
+        let mut job = Job::new("market");
+
+        job.apply(start(&["translate", "voice"], &[]));
+        job.apply(stage("translate", StageStatus::Started));
+        let stage_started = job.stage_started_ms;
+        job.apply(Event::Progress(Progress {
+            stage: "translate".into(),
+            label: Some("translating".into()),
+            done: 20,
+            total: 58,
+            line: Some(20),
+            at: Some(61.2),
+        }));
+        let during = job.progress.clone();
+        job.apply(Event::Stage {
+            stage: "translate".into(),
+            status: StageStatus::Done,
+            seconds: Some(47.0),
+        });
+        job.apply(result(ResultStatus::Done));
+
+        assert!(job.started_ms > 0 && stage_started.is_some_and(|t| t >= job.started_ms));
+        assert_eq!(during.map(|p| (p.done, p.at)), Some((20, Some(61.2))));
+        assert_eq!(job.progress, None, "a finished stage has no progress");
+        assert_eq!(job.timings.get("translate"), Some(&47.0));
+        assert!(job.ended_ms.is_some_and(|end| end >= job.started_ms));
     }
 
     #[test]

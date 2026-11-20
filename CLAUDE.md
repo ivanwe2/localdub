@@ -43,7 +43,7 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 | `tests/` | unit tests; `test_e2e.py` runs whole videos against `tests/fakes/` (fake llama-swap + the real Demucs wrapper; one run http, one local) |
 | `deploy/install.sh` | install/update on CT 103 from git into the Demucs venv, plus the channels' hunspell dictionaries (`LANGS="de fr"` for new ones) |
 | `deploy/gpu/` | the GPU box: `llama-swap.yaml` (models + groups), `demucs_server.py` (Demucs over HTTP), `llama-swap.service` |
-| `server/src/` | Rust server: `lib.rs` (routes: `/api/…`, `/files/…`, the page), `runs.rs` (runs on disk), `events.rs` (engine `--json` lines), `runner.rs` (runs the engine), `job.rs` (the current run), `start.rs` (POST /api/runs: validation, engine args), `channels.rs` (channels on disk), `voice.rs` (a run's voice samples, picks), `videos.rs` (the videos folder, safe names), `download.rs` (yt-dlp downloads from links: args, its printed lines, finding the file; own slot beside the job), `main.rs` (env settings); `testdata/fake-localdub.sh`, `testdata/fake-yt-dlp.sh` |
+| `server/src/` | Rust server: `lib.rs` (routes: `/api/…`, `/files/…`, the page), `runs.rs` (runs on disk), `events.rs` (engine `--json` lines), `runner.rs` (runs the engine), `job.rs` (the current run), `start.rs` (POST /api/runs: validation, engine args), `channels.rs` (channels on disk), `voice.rs` (a run's voice samples, picks), `videos.rs` (the videos folder, safe names), `download.rs` (yt-dlp downloads from links: args, its printed lines, finding the file; own slot beside the job), `waveform.rs` (peaks of vocals.wav / music.wav for the timeline), `main.rs` (env settings); `testdata/fake-localdub.sh`, `testdata/fake-yt-dlp.sh` |
 | `deploy/server/` | the web app on a Linux box: `build.sh` (dev container or CI → `dist/localdub-app.tar.gz`: static musl server + page + `BUILD`), `install.sh` (→ `/opt/localdub`, systemd `localdub-server`, 127.0.0.1:8080; refuses while a run or download is going unless `--force`; laptop uses `ssh -N -L 8080:127.0.0.1:8080`), `yt-dlp.sh` (yt-dlp + Deno into /usr/local/bin, checksums checked; `yt-dlp -U` once installed) |
 | `deploy/update.sh` | on CT 103: engine (git pull + venv install), yt-dlp (install/update) and the latest web app from the GitHub release `app` (CI `release.yml` rebuilds it on every merge to main touching server/web/deploy-server) |
 | `web/` | React + TypeScript page (Vite): `src/api.ts` (API types/client), `src/App.tsx` (job panel, new-run form with upload and download from a link, runs list, reviews), `src/VoicePicker.tsx` (listen, compare, pick), `src/format.ts` (+ tests) |
@@ -132,6 +132,10 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
    title made safe with `--replace-in-metadata`; `--print` lines `[info]`/`[file]` +
    `--progress-template`; checked against real yt-dlp 2026.10.26 + Deno 2.9 in the dev container).
    The CT 103 checkpoint after A+B was postponed by Ivan (Nov 20: "lets not test yet").
+   UI mock-up approved Nov 20 (Ivan: "absolutely crazy good! its perfect!"). Data for it (engine
+   0.11.0): `progress` events (translate, voice: done/total/line/at), TTS calls labelled by line
+   with `audio_seconds`; Job gets started/ended/stage_started ms, timings, progress; RunSummary
+   timings; GET …/waveform. Then the page (`feat/ui-overhaul`).
    **Next, in this order**: CT 103 checkpoint for A, B and C together (ask first), UI overhaul
    (mock-up first: dark studio look, animated sound-wave line background that "speaks" while a run
    works, runs as editing-timeline tracks, timecode numbers, VU-meter tok/s, warm "on air" accent;

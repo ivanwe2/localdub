@@ -124,7 +124,9 @@ per line, and the last line is always the result:
 `error` and, if a stage failed, `stage`). A finished run's result has `outputs`, `shorts` and `timings`;
 `check --json` sends one `check` event per line it checks. Every request to a model also sends a
 `call` event (`kind`: `chat`, `tts`, `asr` or `separation`, with the model, seconds, and for chat the
-tokens and tokens per second). See `src/localdub/events.py`.
+tokens and tokens per second; for voice and transcription the audio's length). The translate and voice
+stages send `progress` events line by line (`done`, `total`, and `at`: where that line is in the
+video). See `src/localdub/events.py`.
 
 ## Requirements
 
@@ -217,10 +219,11 @@ The API:
 | `POST` / `GET /api/runs/<run>/voice` | make voice samples from the run's speech (with test clones, and of the channel's voice now); read them |
 | `POST /api/runs/<run>/voice/pick` | make one the channel's voice: `{"pick": 2}` or `{"pick": "current"}` |
 | `POST /api/runs/<run>/revoice` | dub a finished run again with the channel's voice |
+| `GET /api/runs/<run>/waveform` | how loud the speaker's voice and the music are along the video (600 steps, 0–100), for the timeline |
 | `GET /api/videos`, `PUT /api/videos/<file>` | the uploaded and downloaded videos; upload one (the body is the file) |
 | `POST /api/downloads` | download a video from a link with yt-dlp: `{"url": "https://…"}` (one at a time, beside a run) |
 | `GET /api/download`, `GET /api/download/events` | the current download (title, which part, bytes, speed, time left; the video when done), and live |
-| `GET /api/job`, `GET /api/job/events` | the current run (with its latest model requests and log), and live as Server-Sent Events |
+| `GET /api/job`, `GET /api/job/events` | the current run (with its latest model requests and log, start and stage times, stage timings, line-by-line progress), and live as Server-Sent Events |
 | `GET /api/status`, `GET /api/status/events` | the models llama-swap has running and each GPU's load, memory, temperature and power, live every 2 s |
 | `GET /files/<run>/<path>` | a run's files |
 

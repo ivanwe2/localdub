@@ -100,6 +100,24 @@ def api_key(settings: dict) -> str:
     return ""
 
 
+def wav_seconds(data: bytes) -> float | None:
+    """How long the WAV in `data` plays, from its header (any sample format); None if it isn't one."""
+    if data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        return None
+    at, byte_rate = 12, 0
+    while at + 8 <= len(data):
+        kind, size = data[at:at + 4], int.from_bytes(data[at + 4:at + 8], "little")
+        if kind == b"fmt " and size >= 12:
+            byte_rate = int.from_bytes(data[at + 16:at + 20], "little")
+        elif kind == b"data":
+            size = min(size, len(data) - at - 8)  # a streamed WAV may say 0 or 0xFFFFFFFF
+            if size <= 0:
+                size = len(data) - at - 8
+            return round(size / byte_rate, 2) if byte_rate else None
+        at += 8 + size + (size & 1)
+    return None
+
+
 def multipart(fields: list[tuple[str, str]], file_field: str, filename: str, content: bytes,
               content_type: str = "audio/wav") -> tuple[bytes, str]:
     """An upload like an HTML form sends it (multipart/form-data): text fields plus one file.
@@ -222,15 +240,15 @@ class Server:
 
     # --- voice, transcription, separation ----------------------------------------------------------
 
-    def tts(self, model: str, text: str, lang: str, ref_b64: str, seed: int) -> bytes:
+    def tts(self, model: str, text: str, lang: str, ref_b64: str, seed: int, label: str = "voice clone") -> bytes:
         """Voice clone: llama.cpp's /tts on that model's own server, through llama-swap's passthrough."""
         body = {"input": text, "lang": lang, "seed": seed, "speaker_ref_b64": ref_b64}
         t0 = time.monotonic()
         data = self._req("POST", f"/upstream/{model}/tts", body, timeout=900, raw=True)
         if data[:4] != b"RIFF":
             raise LLMError(f"/tts returned no audio for {text!r}: {data[:300]!r}")
-        events.emit("call", kind="tts", model=model, label="voice clone",
-                    seconds=round(time.monotonic() - t0, 2), chars=len(text))
+        events.emit("call", kind="tts", model=model, label=label,
+                    seconds=round(time.monotonic() - t0, 2), chars=len(text), audio_seconds=wav_seconds(data))
         return data
 
     def transcribe(self, model: str, wav: Path, lang: str) -> dict:

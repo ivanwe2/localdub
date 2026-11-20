@@ -37,6 +37,13 @@ def test_automatic_run_with_shorts(fake_env, capsys):
     assert {c["kind"] for c in calls} == {"chat", "tts", "asr", "separation"}  # every kind of model call
     chat = next(c for c in calls if c["kind"] == "chat")
     assert chat["model"] == "gemma4-31b" and chat["tok_per_s"] == 100.0 and chat["tokens"] == 100
+    tts = next(c for c in calls if c["kind"] == "tts" and c["label"].startswith("line "))
+    assert tts["label"].endswith("take 1") and tts["audio_seconds"] > 0  # which line, and how long it plays
+    progress = [e for e in ev if e["event"] == "progress"]
+    voicing = [e for e in progress if e["stage"] == "voice" and e["label"] == "voicing, take 1"]
+    assert voicing and voicing[-1]["done"] == voicing[-1]["total"] and voicing[0]["at"] >= 0  # line by line, with its place
+    translating = [e for e in progress if e["stage"] == "translate"]
+    assert translating and translating[-1]["done"] == translating[-1]["total"]
     assert result["outputs"]["video"].endswith("auto.en.mp4") and set(result["shorts"]) == {"original", "dub"}
     run = fake_env["home"] / "runs" / "auto"
     assert streams(run / "auto.en.mp4") == ["video", "audio", "audio"]

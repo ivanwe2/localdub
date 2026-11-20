@@ -22,8 +22,15 @@ Every request to a model (llm.py) also reports a "call" event as it finishes, so
 what the AI is doing and how fast:
   {"event": "call", "kind": "chat", "model": "gemma4-31b", "label": "translating 1-20",
    "seconds": 24.1, "tokens": 2463, "tok_per_s": 103.2, "prompt_tokens": 1890, "prompt_per_s": 910.4}
-  {"event": "call", "kind": "tts", "model": "qwen3-tts", "label": "voice clone", "seconds": 0.9, "chars": 64}
+  {"event": "call", "kind": "tts", "model": "qwen3-tts", "label": "line 31, take 1", "seconds": 0.9, "chars": 64,
+   "audio_seconds": 3.1}
   {"event": "call", "kind": "asr", ...}  {"event": "call", "kind": "separation", ...}
+
+Stages that work line by line also report how far they are, with the line's place in the video
+(`at`, seconds), so a reader can move a playhead:
+  {"event": "progress", "stage": "translate", "label": "translating", "done": 20, "total": 58, "line": 20, "at": 61.2}
+  {"event": "progress", "stage": "voice", "label": "voicing, take 1", "done": 31, "total": 58, "line": 31, "at": 72.4}
+  {"event": "progress", "stage": "voice", "label": "checking take 1", "done": 0, "total": 58}
 """
 
 from __future__ import annotations

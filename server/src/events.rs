@@ -45,8 +45,22 @@ pub enum Event {
     },
     /// `localdub languages`: every language the engine knows.
     Languages { languages: Vec<Language> },
+    /// How far a stage that works line by line is (translate, voice).
+    Progress(Progress),
     #[serde(other)]
     Other,
+}
+
+/// `{"event": "progress", "stage": "voice", "label": "voicing, take 1", "done": 31, "total": 58,
+/// "line": 31, "at": 72.4}`: `at` is where that line is in the video, in seconds.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct Progress {
+    pub stage: String,
+    pub label: Option<String>,
+    pub done: u32,
+    pub total: u32,
+    pub line: Option<u32>,
+    pub at: Option<f64>,
 }
 
 /// A language in the engine's table (src/localdub/languages.py), as `localdub languages` lists it.
@@ -118,6 +132,26 @@ pub fn parse_line(line: &str) -> Option<Event> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn progress_line_by_line() {
+        let voicing = r#"{"event": "progress", "stage": "voice", "label": "voicing, take 1", "done": 31,
+                          "total": 58, "line": 31, "at": 72.4}"#;
+        let checking = r#"{"event": "progress", "stage": "voice", "label": "checking take 1", "done": 0, "total": 58}"#;
+
+        let Some(Event::Progress(voicing)) = parse_line(voicing) else {
+            panic!("not progress")
+        };
+        let Some(Event::Progress(checking)) = parse_line(checking) else {
+            panic!("not progress")
+        };
+
+        assert_eq!(
+            (voicing.done, voicing.total, voicing.at),
+            (31, 58, Some(72.4))
+        );
+        assert_eq!((checking.line, checking.at), (None, None));
+    }
 
     #[test]
     fn a_model_call() {
