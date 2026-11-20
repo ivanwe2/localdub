@@ -4,12 +4,14 @@
 //! route uses it.
 
 pub mod channels;
+pub mod download;
 pub mod events;
 pub mod job;
 pub mod runner;
 pub mod runs;
 pub mod start;
 pub mod status;
+pub mod videos;
 pub mod voice;
 
 use std::path::PathBuf;
@@ -31,11 +33,13 @@ use tokio_stream::{Stream, StreamExt};
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::channels::Channel;
+use crate::download::{Download, DownloadRequest, DownloadState};
 use crate::events::{Event, Language};
 use crate::job::{Job, JobState};
 use crate::runs::{RunSummary, Waiting};
 use crate::start::{ShortsRequest, StartRequest};
 use crate::status::{ModelServer, Status};
+use crate::videos::Video;
 use crate::voice::{PickRequest, VoiceSamples};
 
 /// An error answer: a status code and a plain-text reason the page can show as it is.
@@ -71,6 +75,10 @@ pub struct AppState {
     pub status: Arc<watch::Sender<Status>>,
     /// For asking the model server (it keeps its connections open between requests).
     pub client: reqwest::Client,
+    /// yt-dlp's command, for downloads (LOCALDUB_YTDLP); None: no downloads.
+    pub ytdlp: Option<Arc<Vec<String>>>,
+    /// The current (or last) download, beside the job: a download needs no GPU.
+    pub download: Arc<watch::Sender<Option<Download>>>,
 }
 
 impl AppState {
@@ -83,7 +91,16 @@ impl AppState {
             models: None,
             status: Arc::new(watch::Sender::new(Status::default())),
             client: reqwest::Client::new(),
+            ytdlp: None,
+            download: Arc::new(watch::Sender::new(None)),
         }
+    }
+
+    /// Also download videos from links, with this yt-dlp command (the program and any arguments
+    /// that come before ours).
+    pub fn with_ytdlp(mut self, command: Vec<String>) -> AppState {
+        self.ytdlp = Some(Arc::new(command));
+        self
     }
 
     /// Also show the models' status, from this llama-swap.
@@ -363,37 +380,101 @@ async fn put_review(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// A video in the uploads folder.
-#[derive(Serialize)]
-struct Video {
-    name: String,
-    /// The path to give POST /api/runs as `video`.
-    path: String,
-    bytes: u64,
+/// GET /api/videos: the uploaded and downloaded videos, by name.
+async fn list_videos(State(state): State<AppState>) -> Result<Json<Vec<Video>>, Failure> {
+    let list = videos::list(&state.videos()).await.map_err(server_error)?;
+    Ok(Json(list))
 }
 
-/// GET /api/videos: the uploaded videos, by name.
-async fn list_videos(State(state): State<AppState>) -> Result<Json<Vec<Video>>, Failure> {
-    let mut entries = match tokio::fs::read_dir(state.videos()).await {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Json(Vec::new())),
-        Err(e) => return Err(server_error(e)),
+/// POST /api/downloads `{"url": "https://…"}`: downloads that video with yt-dlp into the videos
+/// folder, in the background (202 Accepted, with the download). It runs beside a dub; one download
+/// at a time (409). 503 if downloads aren't set up (LOCALDUB_YTDLP=none).
+async fn start_download(
+    State(state): State<AppState>,
+    Json(req): Json<DownloadRequest>,
+) -> Result<(StatusCode, Json<Download>), Failure> {
+    let Some((program, before)) = state.ytdlp.as_deref().and_then(|c| c.split_first()) else {
+        let msg = "downloads aren't set up here (LOCALDUB_YTDLP)".to_string();
+        return Err((StatusCode::SERVICE_UNAVAILABLE, msg));
     };
-    let mut videos = Vec::new();
-    while let Some(entry) = entries.next_entry().await.map_err(server_error)? {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let meta = entry.metadata().await.map_err(server_error)?;
-        if meta.is_file() && !name.starts_with('.') {
-            let path = entry.path().to_string_lossy().into_owned();
-            videos.push(Video {
-                name,
-                path,
-                bytes: meta.len(),
-            });
+    download::check_url(&req.url).map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e))?;
+    let dir = state.videos();
+    tokio::fs::create_dir_all(&dir)
+        .await
+        .map_err(server_error)?;
+
+    // check and claim in one step, like launch() does for the job
+    let mut busy_with = None;
+    state.download.send_if_modified(|current| match current {
+        Some(d) if d.state == DownloadState::Downloading => {
+            busy_with = Some(d.url.clone());
+            false
         }
+        _ => {
+            *current = Some(Download::new(&req.url));
+            true
+        }
+    });
+    if let Some(url) = busy_with {
+        let msg = format!("{url} is still downloading; one download at a time");
+        return Err((StatusCode::CONFLICT, msg));
     }
-    videos.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(Json(videos))
+
+    let program = program.clone();
+    let mut args = before.to_vec();
+    args.extend(download::args(&dir, &req.url));
+    let slot = state.download.clone();
+    tokio::spawn(async move {
+        let update = |change: &mut dyn FnMut(&mut Download)| {
+            slot.send_modify(|current| {
+                if let Some(d) = current {
+                    change(d);
+                }
+            })
+        };
+        let exited = runner::run_process(
+            &program,
+            &args,
+            |line| update(&mut |d| d.apply(download::parse_line(&line))),
+            |line| update(&mut |d| d.log_line(line.clone())),
+        )
+        .await;
+        let so_far = slot.borrow().clone();
+        let outcome = match (exited, so_far) {
+            (Err(e), _) => Err(format!("could not start yt-dlp ({program}): {e}")),
+            (Ok(code), Some(d)) => download::outcome(&dir, &d, code).await,
+            (Ok(_), None) => return,
+        };
+        if outcome.is_ok() {
+            let _ = tokio::fs::remove_dir_all(dir.join(".partial")).await; // leftovers; kept after a failure, to resume
+        }
+        let mut outcome = Some(outcome);
+        update(&mut |d| {
+            if let Some(outcome) = outcome.take() {
+                d.finish(outcome);
+            }
+        });
+    });
+
+    let download = state.download.borrow().clone();
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(download.expect("the download was set above")),
+    ))
+}
+
+/// GET /api/download: the current (or last) download; null if there was none since the start.
+async fn get_download(State(state): State<AppState>) -> Json<Option<Download>> {
+    Json(state.download.borrow().clone())
+}
+
+/// GET /api/download/events: the download as Server-Sent Events, now and on every change.
+async fn download_events(
+    State(state): State<AppState>,
+) -> Sse<impl Stream<Item = Result<sse::Event, axum::Error>>> {
+    let updates = WatchStream::new(state.download.subscribe())
+        .map(|download| sse::Event::default().json_data(download));
+    Sse::new(updates).keep_alive(KeepAlive::default())
 }
 
 /// PUT /api/videos/{file}, the body is the video: stores it in the uploads folder, streamed to
@@ -539,7 +620,7 @@ async fn job_events(
 
 /// The whole server:
 /// - `/api/...` the JSON API: health, runs (start, continue, review, voice samples, Shorts), channels, languages,
-///   uploads, the job, the models' and GPUs' status
+///   uploads, downloads, the job, the models' and GPUs' status
 /// - `/files/<run>/<path>` a run's files, e.g. the dubbed video (ServeDir also answers range
 ///   requests, so the browser can seek in a video, and never serves anything outside runs/)
 /// - everything else: the web UI, with index.html for any path it doesn't have
@@ -563,6 +644,9 @@ pub fn app(state: AppState) -> Router {
             "/videos/{file}",
             put(upload_video).layer(DefaultBodyLimit::disable()), // videos are big
         )
+        .route("/downloads", post(start_download))
+        .route("/download", get(get_download))
+        .route("/download/events", get(download_events))
         .route("/job", get(get_job))
         .route("/job/events", get(job_events))
         .route("/status", get(get_status))
@@ -1452,5 +1536,129 @@ mod tests {
         })
         .await;
         assert!(matches!(found, Ok(true)), "events so far:\n{seen}");
+    }
+
+    /// A stand-in for yt-dlp: prints what the real one would, from a story picked by the link.
+    const FAKE_YTDLP: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/fake-yt-dlp.sh");
+
+    fn with_downloads(state: AppState) -> AppState {
+        state.with_ytdlp(vec!["sh".into(), FAKE_YTDLP.into()])
+    }
+
+    async fn download(state: &AppState, story: &str) -> (StatusCode, Value) {
+        let body = json!({"url": format!("https://example.com/{story}")});
+        post_json(app(state.clone()), "/api/downloads", body).await
+    }
+
+    /// Asks for the download until it has ended.
+    async fn download_when_settled(state: &AppState) -> Value {
+        for _ in 0..250 {
+            let (_, download) = get_json(app(state.clone()), "/api/download").await;
+            if download["state"] != "downloading" {
+                return download;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("the download was still going after 5 s");
+    }
+
+    #[tokio::test]
+    async fn a_video_is_downloaded_from_a_link_listed_and_dubbed() {
+        let home = tempfile::tempdir().unwrap();
+        let state = with_downloads(test_state(home.path()));
+        let (_, before) = get_json(app(state.clone()), "/api/download").await;
+
+        let (status, started) = download(&state, "ok").await;
+        let done = download_when_settled(&state).await;
+
+        assert_eq!(before, Value::Null);
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(started["state"], "downloading");
+        assert_eq!(done["state"], "done", "{done}");
+        assert_eq!(done["title"], "A test video");
+        assert_eq!((&done["part"], &done["parts"]), (&json!(2), &json!(2)));
+        assert_eq!(done["video"]["name"], "yt-abc123-A-test-video.mp4");
+        let (_, videos) = get_json(app(state.clone()), "/api/videos").await;
+        assert_eq!(videos, json!([done["video"]]));
+        assert!(
+            !home.path().join("videos/.partial").exists(),
+            "the unfinished files' folder is cleared"
+        );
+        let body = json!({"video": done["video"]["path"], "channel": "c", "name": "from-link"});
+        let (status, _) = post_json(app(state.clone()), "/api/runs", body).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        job_when_settled(&state).await;
+    }
+
+    #[tokio::test]
+    async fn a_download_runs_beside_a_dub_but_one_download_at_a_time() {
+        let home = tempfile::tempdir().unwrap();
+        let state = with_downloads(test_state(home.path()));
+
+        let (dub, _) = post_json(
+            app(state.clone()),
+            "/api/runs",
+            start_body(&state, "slow-run"),
+        )
+        .await;
+        let (first, _) = download(&state, "slow").await;
+        let (second, _) = download(&state, "ok").await;
+
+        assert_eq!(dub, StatusCode::ACCEPTED);
+        assert_eq!(first, StatusCode::ACCEPTED);
+        assert_eq!(second, StatusCode::CONFLICT);
+        assert_eq!(download_when_settled(&state).await["state"], "done");
+        assert_eq!(job_when_settled(&state).await["state"], "done");
+    }
+
+    #[tokio::test]
+    async fn a_failed_download_says_why_and_an_odd_name_is_made_safe() {
+        let home = tempfile::tempdir().unwrap();
+        let state = with_downloads(test_state(home.path()));
+
+        download(&state, "fails").await;
+        let failed = download_when_settled(&state).await;
+        download(&state, "odd-name").await;
+        let odd = download_when_settled(&state).await;
+
+        assert_eq!(failed["state"], "failed");
+        assert_eq!(
+            failed["error"],
+            "[generic] Unable to download webpage: HTTP Error 404: Not Found"
+        );
+        assert_eq!(failed["log"].as_array().map(Vec::len), Some(2));
+        assert_eq!(odd["state"], "done", "{odd}");
+        assert_eq!(odd["video"]["name"], "yt-odd1-Odd-name.mp4");
+        assert!(home.path().join("videos/yt-odd1-Odd-name.mp4").is_file());
+    }
+
+    #[tokio::test]
+    async fn downloads_need_a_plain_link_and_yt_dlp() {
+        let home = tempfile::tempdir().unwrap();
+        let state = with_downloads(test_state(home.path()));
+
+        for body in [
+            json!({"url": "--exec=sh"}),
+            json!({"url": "file:///etc/passwd"}),
+            json!({"url": "https://example.com/a b"}),
+            json!({}),
+        ] {
+            let (status, _) = post_json(app(state.clone()), "/api/downloads", body.clone()).await;
+            assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        }
+        let (off, _) = download(&test_state(home.path()), "ok").await;
+        assert_eq!(off, StatusCode::SERVICE_UNAVAILABLE);
+
+        let missing = test_state(home.path()).with_ytdlp(vec!["/no/such/yt-dlp".into()]);
+        let (status, _) = download(&missing, "ok").await;
+        let failed = download_when_settled(&missing).await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert!(
+            failed["error"]
+                .as_str()
+                .unwrap()
+                .contains("could not start yt-dlp"),
+            "{failed}"
+        );
     }
 }
