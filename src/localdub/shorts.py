@@ -29,7 +29,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import media
+from . import languages, media
 from .llm import LLMError
 
 VISION_PROMPT = """These are {n} frames from a video, at {times} (left to right, then top to bottom).
@@ -249,6 +249,10 @@ def _ass_text(s: str) -> str:
     return s.replace("\\", "").replace("{", "(").replace("}", ")").replace("\n", " ")
 
 
+# short forms that end in a dot without ending the sentence ("Dr.", "Prof.", "ул."), in every language
+_ABBREVIATIONS = {a for lang in languages.LANGUAGES.values() for a in lang.abbreviations} | {"st"}
+
+
 def _chunks(words: list[str], max_chars: int = 18) -> list[list[int]]:
     """Indices of 1-3 words per caption (one line at this size), as Shorts captions usually are;
     a new caption after punctuation, or before a word that would make the line too long."""
@@ -258,7 +262,7 @@ def _chunks(words: list[str], max_chars: int = 18) -> list[list[int]]:
             out.append(cur)
             cur = []
         cur.append(i)
-        if re.search(r"[.!?,;:…]$", w) and not re.fullmatch(r"(Mr|Mrs|Ms|Dr|St|г|гр|ул)\.", w):
+        if re.search(r"[.!?,;:…]$", w) and not (w.endswith(".") and w[:-1].lower() in _ABBREVIATIONS):
             out.append(cur)
             cur = []
     return out + ([cur] if cur else [])

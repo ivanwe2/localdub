@@ -25,7 +25,12 @@ jobs:
           python-version: "3.12"
       - name: System tools (ffmpeg with libass, hunspell + Bulgarian, caption font)
         timeout-minutes: 8
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg hunspell hunspell-bg fontconfig fonts-dejavu-core
+        # a slow mirror once hung this step for 8 minutes: give up on a stalled connection and retry
+        env:
+          APT_OPTS: -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30
+        run: |
+          sudo apt-get $APT_OPTS update
+          sudo apt-get $APT_OPTS install -y ffmpeg hunspell hunspell-bg fontconfig fonts-dejavu-core
       - run: pip install -e ".[dev]"
       - run: python -m pyflakes src tests deploy
       - name: Tests (the slow ones run whole videos against fake model servers)

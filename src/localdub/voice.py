@@ -22,7 +22,8 @@ from pathlib import Path
 
 import numpy as np
 
-from . import media
+from . import languages, media
+
 from .asr import transcribe_folder
 
 RATE = 24000
@@ -102,40 +103,40 @@ def cut_voice(vocals: Path, start: float, end: float, dst: Path) -> None:
 
 # --- comparing text -------------------------------------------------------------------------------
 
-_ONES = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen " \
-        "sixteen seventeen eighteen nineteen".split()
-_TENS = "_ _ twenty thirty forty fifty sixty seventy eighty ninety".split()
-
-
-def number_words(n: int) -> str:
-    if n < 20:
-        return _ONES[n]
-    if n < 100:
-        return _TENS[n // 10] + ("" if n % 10 == 0 else " " + _ONES[n % 10])
-    if n < 1000:
-        return _ONES[n // 100] + " hundred" + ("" if n % 100 == 0 else " " + number_words(n % 100))
-    for size, word in ((10 ** 9, "billion"), (10 ** 6, "million"), (1000, "thousand")):
-        if n >= size:
-            rest = n % size
-            return number_words(n // size) + " " + word + ("" if rest == 0 else " " + number_words(rest))
-    return str(n)
-
-
-_CYR = dict(zip("абвгдежзийклмнопрстуфхцчшщъьюяыэё",
+_CYR = dict(zip("абвгдежзийклмнопрстуфхцчшщъьюяыэёіїєґ",
                 ["a", "b", "v", "g", "d", "e", "zh", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r", "s", "t",
-                 "u", "f", "h", "ts", "ch", "sh", "sht", "a", "", "yu", "ya", "y", "e", "yo"]))
-_ABBR = {"mr": "mister", "mrs": "missus", "ms": "miss", "dr": "doctor", "vs": "versus"}
+                 "u", "f", "h", "ts", "ch", "sh", "sht", "a", "", "yu", "ya", "y", "e", "yo", "i", "yi", "ye", "g"]))
 
 
-def normalize(text: str) -> list[str]:
-    text = "".join(_CYR.get(c, c) for c in text.lower())  # Nemotron sometimes writes names in Cyrillic
-    text = text.replace("%", " percent")
-    text = re.sub(r"(\d),(\d{3})", r"\1\2", text)
-    text = re.sub(r"\d+", lambda m: " " + number_words(int(m.group(0))) + " " if len(m.group(0)) < 10 else m.group(0), text)
-    text = re.sub(r"(\w)k\b", r"\1 thousand", text)
-    words = re.findall(r"[\w']+", text.replace("-", " "))
-    return [_ABBR.get(w, w) for w in words]
+_SEPARATOR = {",": r"(\d),(\d{3})", ".": r"(\d)\.(\d{3})", " ": r"(\d)[ \u00a0\u202f](\d{3})"}
 
+
+def normalize(text: str, lang: str = "en") -> list[str]:
+    """The words of a line, comparable between the script and what the recogniser heard: lower case,
+    numbers and "%" spelled out in the dub language, abbreviations as spoken, Cyrillic in Latin
+    letters (Nemotron sometimes writes names in Cyrillic). A language whose numbers can't be spelled
+    loses its digits on both sides instead, so a number never fails a take on its own."""
+    language = languages.LANGUAGES.get(lang)
+    text = text.lower()
+    if language:
+        text = text.replace("%", f" {language.percent} ")
+        pattern = _SEPARATOR.get(language.thousands)
+        while pattern and re.search(pattern, text):
+            text = re.sub(pattern, r"\1\2", text)
+
+    def number(m: re.Match) -> str:
+        digits = m.group(0)
+        if len(digits) >= 10:
+            return digits
+        spelled = languages.spell_number(int(digits), lang)
+        return f" {spelled} " if spelled is not None else " "
+
+    text = re.sub(r"\d+", number, text)
+    if lang == "en":
+        text = re.sub(r"(\w)k\b", r"\1 thousand", text)
+    abbreviations = language.abbreviations if language else {}
+    words = [abbreviations.get(w, w) for w in re.findall(r"[\w']+", text.replace("-", " "))]
+    return ["".join(_CYR.get(c, c) for c in w) for w in " ".join(words).split()]
 
 def _same(a: str, b: str) -> bool:
     return a == b or difflib.SequenceMatcher(None, a, b).ratio() >= 0.7
@@ -153,8 +154,9 @@ def wer(ref: list[str], hyp: list[str]) -> float:
     return d[len(hyp)] / len(ref)
 
 
-def judge(script: str, heard: str) -> tuple[bool, float, str]:
-    ref, hyp = normalize(script), normalize(heard)
+def judge(script: str, heard: str, lang: str = "en") -> tuple[bool, float, str]:
+    """Does the take say the script? (passed, word error rate, why not)"""
+    ref, hyp = normalize(script, lang), normalize(heard, lang)
     w = wer(ref, hyp)
     joined = difflib.SequenceMatcher(None, "".join(ref), "".join(hyp)).ratio()
     ends = bool(ref) and "".join(hyp).endswith(ref[-1][-3:])
@@ -246,7 +248,7 @@ def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedde
         for s in pending:
             name = take_name(s, seed)
             c = checks[name]
-            ok, w, why = judge(s["tgt"], c["heard"])
+            ok, w, why = judge(s["tgt"], c["heard"], lang)
             if want > 1 and "sim" not in c:  # checked before similarity was on
                 from .speaker import embed_files, similarity
                 c["sim"] = checks[name]["sim"] = similarity(embed_files(embedder, [work / "trim" / f"{name}.wav"])[0], vp)

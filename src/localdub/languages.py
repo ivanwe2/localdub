@@ -22,6 +22,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+try:  # spells numbers in most languages; without it only English numbers are spelled
+    from num2words import num2words
+except ImportError:  # pragma: no cover
+    num2words = None
+
 
 @dataclass(frozen=True)
 class Language:
@@ -142,3 +147,44 @@ def dub_languages(settings: dict) -> list[str]:
     """The languages a channel can be dubbed into: the voice model's (settings), in table order."""
     wanted = set(settings.get("tts_languages", []))
     return [code for code in LANGUAGES if code in wanted]
+
+
+# --- numbers ---------------------------------------------------------------------------------------
+
+_ONES = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen " \
+        "sixteen seventeen eighteen nineteen".split()
+_TENS = "_ _ twenty thirty forty fifty sixty seventy eighty ninety".split()
+
+
+def number_words(n: int) -> str:
+    if n < 20:
+        return _ONES[n]
+    if n < 100:
+        return _TENS[n // 10] + ("" if n % 10 == 0 else " " + _ONES[n % 10])
+    if n < 1000:
+        return _ONES[n // 100] + " hundred" + ("" if n % 100 == 0 else " " + number_words(n % 100))
+    for size, word in ((10 ** 9, "billion"), (10 ** 6, "million"), (1000, "thousand")):
+        if n >= size:
+            rest = n % size
+            return number_words(n // size) + " " + word + ("" if rest == 0 else " " + number_words(rest))
+    return str(n)
+
+
+def spell_number(n: int, code: str) -> str | None:
+    """A number in words in this language ("zweihunderttausend"), or None if localdub can't spell it
+    there. English keeps localdub's own spelling, without "and" ("two hundred five")."""
+    if code == "en":
+        return number_words(n)
+    lang = LANGUAGES.get(code)
+    if lang is None or lang.numbers is None or num2words is None:
+        return None
+    try:
+        return num2words(n, lang=lang.numbers).replace(",", " ")
+    except (NotImplementedError, OverflowError, KeyError):
+        return None
+
+
+def written_number(n: int, code: str) -> str:
+    """A number in digits as this language writes it: "200,000", "200.000", "200 000"."""
+    sep = LANGUAGES[code].thousands if code in LANGUAGES else ","
+    return f"{n:,}".replace(",", sep)

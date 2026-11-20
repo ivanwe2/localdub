@@ -301,8 +301,9 @@ def score_candidates(run: Run, ctx: Ctx, segs: list[dict], cands: list[dict]) ->
     """Clone a few test sentences from each candidate sample; rank the samples by how much the clones
     sound like the speaker's real voice. Leaves the order alone if the speaker model isn't available."""
     import base64
-    from .speaker import CALIBRATION, embed_files, get_embedder, similarity
-    lines = CALIBRATION.get(ctx.profile["target_lang"])
+    from .speaker import embed_files, get_embedder, similarity
+    target = languages.LANGUAGES.get(ctx.profile["target_lang"])
+    lines = list(target.calibration) if target else []
     embedder = get_embedder(ctx.settings) if lines else None
     if embedder is None:
         return

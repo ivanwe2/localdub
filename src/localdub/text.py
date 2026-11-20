@@ -15,6 +15,8 @@ import subprocess
 import sys
 import tempfile
 
+from . import languages
+
 SENTENCE_END = (".", "!", "?", "…")
 CLAUSE_END = (",", ";", ":", "—", "–")
 
@@ -141,11 +143,10 @@ class Speller:
 
 SPELL_PROMPT = (
     "You proofread {lang} transcripts made by speech recognition. The recogniser writes words the way "
-    "they sound, which causes spelling mistakes (for Bulgarian, e.g. 'ф' for 'в' as in \"фсички\" -> "
-    "\"всички\", \"ефтино\" -> \"евтино\", or an extra 'й' as in \"найемите\" -> \"наемите\"). Colloquial "
-    "spellings count as mistakes: use the standard spelling.\n"
-    "Fix only words that are misspelled. Leave every correctly spelled word exactly as it is, including "
-    "count forms after numbers. Do not guess names: change a name only to one from the list of known "
+    "they sound, which causes spelling mistakes. {hint}Colloquial spellings count as mistakes: use the "
+    "standard spelling.\n"
+    "Fix only words that are misspelled. Leave every correctly spelled word exactly as it is. "
+    "Do not guess names: change a name only to one from the list of known "
     "names, if one is given. Never add, remove, merge, split or reorder words, and never change grammar, "
     "style or punctuation. Each corrected line must have exactly the same number of words as the original.\n"
     'Reply with JSON only: {{"fixes": [{{"id": <line id>, "text": "<corrected line>"}}]}}, listing only the '
@@ -190,7 +191,7 @@ def spellcheck(segs, server, settings, profile) -> dict:
         user = "\n".join(f"{s['id']}: {text_of(s['words'])}" for s in chunk)
         if names:
             user = "Known names (correct spelling): " + ", ".join(sorted(names)) + "\n\n" + user
-        reply = server.chat_json(settings["text_model"], SPELL_PROMPT.format(lang=lang), user,
+        reply = server.chat_json(settings["text_model"], SPELL_PROMPT.format(lang=lang, hint=spelling_hint(profile["source_lang"])), user,
                                  settings["spell_effort"], 4096, f"spelling {chunk[0]['id']}-{chunk[-1]['id']}")
         for fix in reply.get("fixes", []):
             try:
@@ -240,7 +241,7 @@ TRANSLATE_PROMPT = (
     "{speaker}Do not translate word for word, and do not add or drop meaning.\n"
     "Each line is a sentence with a time slot and a character budget, roughly what fits when spoken. Stay "
     "within the budget: prefer shorter phrasing over long literal renderings. Write numbers out as words "
-    "(\"two hundred thousand\", not \"200,000\"), so the length is honest. Translate each line on its own; do "
+    "({numbers}), so the length is honest. Translate each line on its own; do "
     "not move content between lines.\n"
     "Always use the glossary translations and the given name spellings. The examples are lines from this "
     "channel's earlier videos, approved by a human: follow their wording and tone where they fit. Lines "
@@ -248,6 +249,20 @@ TRANSLATE_PROMPT = (
     'Reply with JSON only: {{"lines": [{{"id": <line id>, "text": "<translation>"}}]}}, one entry for every '
     "line to translate, in order."
 )
+
+def spelling_hint(code: str) -> str:
+    """The language's examples of spelling-by-ear mistakes for the spelling prompt, if it has any."""
+    lang = languages.LANGUAGES.get(code)
+    return lang.spelling_hint.rstrip() + " " if lang and lang.spelling_hint else ""
+
+
+def number_example(code: str) -> str:
+    """How the translation prompt shows "numbers as words" in the dub language."""
+    spelled = languages.spell_number(200000, code)
+    if spelled is None:
+        return "not as digits"
+    return f'"{spelled}", not "{languages.written_number(200000, code)}"'
+
 
 def reply_text(item: dict) -> str:
     """The text of one line in the translator's reply: its "text", or else the first other text field
@@ -321,6 +336,7 @@ def translate(segs, server, settings, profile, progress=None) -> None:
     `progress()` is called after each request so the caller can save what's done."""
     src, tgt = profile["source_language_name"], profile["target_language_name"]
     system = TRANSLATE_PROMPT.format(src=src, tgt=tgt, style=profile["style"],
+                                     numbers=number_example(profile["target_lang"]),
                                      speaker=speaker_note(profile.data.get("speaker", "")))
     memory = profile.memory()
     names = {k: v for k, v in profile["names"].items() if v}
