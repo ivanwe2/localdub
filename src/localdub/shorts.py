@@ -130,7 +130,7 @@ def look(sheets: list[dict], cache_path: Path, server, model: str) -> dict:
 # --- 3. select ----------------------------------------------------------------------------------------
 
 def span(s: dict, lang: str) -> tuple[float, float]:
-    """Where the line is heard: the dub take where it was placed, or his own words in the original."""
+    """Where the line is heard: the dub take where it was placed, or the speaker's own words in the original."""
     if lang == "original":
         words = s.get("words") or []
         return (float(words[0]["start"]), float(words[-1]["end"])) if words else (float(s["start"]), float(s["end"]))
@@ -286,7 +286,7 @@ def captions(segs: list[dict], offset: float, length: float, title: str, lang: s
             caps.append([max(0.0, a), min(b, length), " ".join(words)])
 
     for s in segs:
-        if lang == "original":  # his own words, each with its real time
+        if lang == "original":  # the speaker's own words, each with its real time
             ws = [w for w in s.get("words") or [] if str(w["word"]).strip()]
             groups = _chunks([w["word"] for w in ws])
             for g, nxt in zip(groups, groups[1:] + [None]):

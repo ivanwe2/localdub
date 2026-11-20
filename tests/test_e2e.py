@@ -23,7 +23,8 @@ def events_of(capsys):
 def test_automatic_run_with_shorts(fake_env, capsys):
     """The default setup: every model behind the model server (llama-swap), nothing run locally."""
     fake_env["use"]()
-    rc = main(["run", str(fake_env["video"]), "--channel", "auto", "--name", "auto", "--no-review", "--shorts", "1",
+    rc = main(["run", str(fake_env["video"]), "--channel", "auto", "--from", "bg", "--to", "en", "--name", "auto",
+               "--no-review", "--shorts", "1",
                "--json"])
     assert rc == 0
     ev = events_of(capsys)
@@ -55,7 +56,7 @@ def test_reviewed_run_teaches_the_channel(fake_env, capsys):
     local_log = fake_env["state"] / "asr-local.log"
     before = local_log.read_text(encoding="utf-8") if local_log.exists() else ""
     video = str(fake_env["video"])
-    assert main(["run", video, "--channel", "taught", "--name", "taught", "--json"]) == 3
+    assert main(["run", video, "--channel", "taught", "--from", "bg", "--to", "en", "--name", "taught", "--json"]) == 3
     result = events_of(capsys)[-1]
     assert result["status"] == "waiting" and result["exit_code"] == 3
     assert result["waiting_for"]["kind"] == "review1" and result["waiting_for"]["file"].endswith("review-1-transcript.txt")

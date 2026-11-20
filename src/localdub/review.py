@@ -40,10 +40,10 @@ def write_transcript_review(path: Path, segs: list[dict], report: dict, voice: d
     if voice and voice.get("candidates"):
         scored = any(c.get("sim") is not None for c in voice["candidates"])
         lines.append("# Voice sample: candidates from this video, " + (
-            "ranked by how much clones made from each sound like him (1.00 = identical):" if scored else
+            "ranked by how much clones made from each sound like the speaker (1.00 = identical):" if scored else
             "cleanest first (install the speaker model to rank them by likeness):"))
         for k, c in enumerate(voice["candidates"], start=1):
-            sim = f"   sounds like him: {c['sim']:.2f}" if c.get("sim") is not None else ""
+            sim = f"   sounds like the speaker: {c['sim']:.2f}" if c.get("sim") is not None else ""
             lines.append(f"#   {k}. {mmss(c['start'])}-{mmss(c['end'])}{sim}   {c['path']}")
         lines += [
             "#   Listen to them. 'voice: auto' takes number 1; or write a number (voice: 2), a stretch of this",
@@ -62,7 +62,7 @@ def write_transcript_review(path: Path, segs: list[dict], report: dict, voice: d
         ]
     elif voice:
         lines += [
-            "# Voice sample: no clean stretch was found automatically. Give 10-20 s of this video where he",
+            "# Voice sample: no clean stretch was found automatically. Give 10-20 s of this video where the speaker",
             "#   speaks clearly in whole sentences, e.g. 'voice: 01:20-01:38', or a WAV file's path.",
             "voice: ",
             "",

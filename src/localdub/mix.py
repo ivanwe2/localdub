@@ -12,7 +12,7 @@ from .voice import RATE, read_audio
 
 
 def place(segs: list[dict], total_s: float, dst: Path, max_delay: float = 1.0, gap: float = 0.08) -> dict:
-    """Lay the takes on one track. A line normally starts where he started it; if the line before
+    """Lay the takes on one track. A line normally starts where the speaker started it; if the line before
     is still speaking, it starts just after it, up to `max_delay` late. Most lines finish early,
     so the delay is absorbed within a line or two. Sets s["placed"] and s["overlap"] (seconds the
     line still runs into the next one)."""
@@ -48,7 +48,7 @@ def place(segs: list[dict], total_s: float, dst: Path, max_delay: float = 1.0, g
 
 
 def mix(placed: Path, vocals: Path, music: Path, dst: Path, lufs: float) -> dict:
-    """Set the dub as loud as his voice was in the original, add the music bed, bring the mix to `lufs`.
+    """Set the dub as loud as the speaker's voice was in the original, add the music bed, bring the mix to `lufs`.
 
     Fixed gains (measured, then applied), so the voice/music balance is the original's and the
     music keeps its dynamics; a limiter only catches peaks.

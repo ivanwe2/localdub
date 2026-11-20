@@ -51,7 +51,7 @@ def frame_db(x: np.ndarray, rate: int = 16000, frame_s: float = 0.05) -> np.ndar
 
 def voice_candidates(segs: list[dict], vocals: Path, music: Path, k: int = 3,
                      min_s: float = 10.0, max_s: float = 20.0) -> list[dict]:
-    """Up to k non-overlapping runs of whole sentences (10-20 s, no long pauses) where his voice is
+    """Up to k non-overlapping runs of whole sentences (10-20 s, no long pauses) where the speaker's voice is
     loudest relative to the music underneath it, cleanest first."""
     v = frame_db(read_audio(vocals))
     m = frame_db(read_audio(music))
@@ -171,8 +171,8 @@ def judge(script: str, heard: str) -> tuple[bool, float, str]:
 # --- voicing ----------------------------------------------------------------------------------------------
 
 def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedder=None, vp=None) -> list[dict]:
-    """Voice every line. With a speaker model (`embedder`) and his voiceprint (`vp`), each line gets up to
-    settings["takes_per_line"] good takes and the one that sounds most like him is kept."""
+    """Voice every line. With a speaker model (`embedder`) and the speaker's voiceprint (`vp`), each line gets up to
+    settings["takes_per_line"] good takes and the one that sounds most like the speaker is kept."""
     work = run_dir / "voice"
     for d in ("raw", "trim", "fit"):
         (work / d).mkdir(parents=True, exist_ok=True)
@@ -237,7 +237,7 @@ def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedde
                 if name in to_check:
                     checks[name] = {"heard": got.get(name, {}).get("text", ""),
                                     "dur": round(media.duration(work / "trim" / f"{name}.wav"), 3)}
-            if want > 1:  # how much each new take sounds like him
+            if want > 1:  # how much each new take sounds like the speaker
                 from .speaker import embed_files, similarity
                 for name, e in zip(to_check, embed_files(embedder, [work / "trim" / f"{x}.wav" for x in to_check])):
                     checks[name]["sim"] = similarity(e, vp)
@@ -271,7 +271,7 @@ def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedde
             continue
         passing = [t for t in options if t["ok"]]
         fitting = [t for t in passing if fits(t, s)]
-        if fitting:  # the one that sounds most like him, else the most accurate
+        if fitting:  # the one that sounds most like the speaker, else the most accurate
             best = max(fitting, key=lambda t: (t.get("sim") or 0.0, -t["wer"]))
         elif passing:
             best = min(passing, key=lambda t: t["dur"])

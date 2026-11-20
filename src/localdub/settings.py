@@ -3,8 +3,9 @@
 Settings: ~/dub/settings.json, optional. Every key has a default below, so the file
 only needs what differs on your machine.
 
-Profile: ~/dub/channels/<name>/profile.json, created on the first run and updated
-from your review edits. Translation memory lives next to it in memory.jsonl.
+Profile: ~/dub/channels/<name>/profile.json, created on the channel's first run (with its languages,
+`--from` / `--to`) and updated from your review edits. Translation memory lives next to it in
+memory.jsonl.
 """
 
 from __future__ import annotations
@@ -13,6 +14,8 @@ import copy
 import json
 import os
 from pathlib import Path
+
+from . import languages
 
 def home() -> Path:
     """Where channels, runs and settings.json live: $LOCALDUB_HOME, else ~/dub (read on every call)."""
@@ -24,6 +27,9 @@ DEFAULT_SETTINGS = {
     "api_key_file": "/etc/llama.env",
     "text_model": "gemma4-31b",
     "tts_model": "qwen3-tts",
+    # what the voice model can speak, so what a channel can be dubbed into (Qwen3-TTS also speaks
+    # zh, ja and ko, which need sentence and caption rules localdub doesn't have yet)
+    "tts_languages": ["en", "de", "fr", "it", "pt", "es", "ru"],
     "spell_effort": "none",
     "translate_effort": "medium",
     "shorten_effort": "none",
@@ -69,18 +75,24 @@ DEFAULT_SETTINGS = {
     },
 }
 
-DEFAULT_PROFILE = {
-    "source_lang": "bg",
-    "target_lang": "en",
-    "source_language_name": "Bulgarian",
-    "target_language_name": "English",
-    "hunspell_dict": "bg_BG",
+DEFAULT_PROFILE = {  # the languages are set when the channel is made (Profile.set_languages)
+    "speaker": "",  # "man" / "woman" / "": only for the translation's grammatical gender
     "style": "casual, friendly YouTube video; keep the creator's tone and humour",
     "voice_ref": "",
     "names": {},
     "glossary": {},
     "accepted_words": [],
     "corrections": {},
+}
+
+
+# what a profile saved before 0.9.0 (without languages) meant: every channel then was Bulgarian → English
+LEGACY_LANGUAGES = {
+    "source_lang": "bg",
+    "target_lang": "en",
+    "source_language_name": "Bulgarian",
+    "target_language_name": "English",
+    "hunspell_dict": "bg_BG",
 }
 
 
@@ -109,7 +121,31 @@ class Profile:
         self.path = self.dir / "profile.json"
         self.memory_path = self.dir / "memory.jsonl"
         saved = json.loads(self.path.read_text(encoding="utf-8")) if self.path.exists() else {}
+        if saved and "source_lang" not in saved:
+            saved = {**LEGACY_LANGUAGES, **saved}  # made before channels had languages: all were bg → en
         self.data = _merge(DEFAULT_PROFILE, saved)
+
+    @property
+    def is_new(self) -> bool:
+        """No profile saved yet: the channel's first run, which must give its languages."""
+        return not self.path.exists()
+
+    def set_languages(self, source: str, target: str, settings: dict) -> None:
+        """A new channel's languages, checked against the language table and the voice model."""
+        src, tgt = languages.get(source), languages.get(target)
+        if src.code == tgt.code:
+            raise ValueError(f"a channel dubs from one language into another, not {src.name} into {tgt.name}")
+        dubbable = languages.dub_languages(settings)
+        if tgt.code not in dubbable:
+            raise ValueError(f"the voice model can't speak {tgt.name}; a channel can be dubbed into: "
+                             + ", ".join(dubbable))
+        self.data.update({
+            "source_lang": src.code,
+            "target_lang": tgt.code,
+            "source_language_name": src.name,
+            "target_language_name": tgt.name,
+            "hunspell_dict": src.hunspell,
+        })
 
     def __getitem__(self, key):
         return self.data[key]

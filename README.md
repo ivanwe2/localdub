@@ -5,10 +5,12 @@ effects, and cut Shorts from it, in the dubbed language or the original. Everyth
 own GPUs: no cloud APIs.
 
 ```
-localdub run video.mp4 --channel mychannel                 dub it, stopping twice for your review
+localdub run video.mp4 --channel mychannel --from bg --to en
+                                                           a new channel: its video and dub languages;
+                                                           dub it, stopping twice for your review
 localdub run video.mp4 --channel mychannel --no-review --shorts 3
-                                                           everything in one go, plus the top 3 Shorts
-                                                           in each language
+                                                           the next video: everything in one go, plus
+                                                           the top 3 Shorts in each language
 ```
 
 It is a command-line tool on purpose: a person, a script or an AI agent can drive it the same way
@@ -29,18 +31,18 @@ progress live, watch and download the results.
 | transcribe | every word with its time; long videos in parts of up to 25 min, cut at pauses | Nemotron 3.5 Transcribe via NeMo-Speech.cpp |
 | spelling | words → sentences by their times; spelling fixes, allowed **only** for words hunspell says are misspelled, so real words are never "corrected" | Gemma 4 31B (llama.cpp) |
 | **review 1** | you check the doubtful lines and choose the voice sample | a text file |
-| translate | whole sentences, 20 at a time with context; each gets a length budget from how long he took to say it; the channel's names, glossary and past approved lines are given as examples | Gemma 4 31B |
+| translate | whole sentences, 20 at a time with context; each gets a length budget from how long the speaker took to say it; the channel's names, glossary and past approved lines are given as examples | Gemma 4 31B |
 | **review 2** | you check the translation | a text file |
-| voice | every line in his cloned voice; each take is transcribed back and checked; takes that fail, don't fit, or sound less like him are replaced by another seed; lines too long in every take are shortened and voiced again | Qwen3-TTS (llama.cpp), Nemotron, WavLM |
-| mix | lines placed where he spoke (a line may start up to 1 s late so it never talks over the one before), the voice levelled like his original, laid over the music; video with the dub as the default track and the original as the second; subtitles | ffmpeg, numpy |
+| voice | every line in the speaker's cloned voice; each take is transcribed back and checked; takes that fail, don't fit, or sound less like the speaker are replaced by another seed; lines too long in every take are shortened and voiced again | Qwen3-TTS (llama.cpp), Nemotron, WavLM |
+| mix | lines placed where the speaker spoke (a line may start up to 1 s late so it never talks over the one before), the voice levelled like the original, laid over the music; video with the dub as the default track and the original as the second; subtitles | ffmpeg, numpy |
 
 **Choosing the voice.** A speaker-verification model (WavLM x-vectors) turns a few seconds of speech
 into a fingerprint; recordings of the same person point in nearly the same direction, whatever the
-language. localdub builds his voiceprint from his real speech in the video, then
+language. localdub builds the speaker's voiceprint from their real speech in the video, then
 - picks the voice sample: up to three clean stretches are found, a few test sentences are cloned
-  from each, and the sample whose clones sound most like him wins;
+  from each, and the sample whose clones sound most like the speaker wins;
 - picks the takes: each line gets two good takes (passing the check, fitting the slot) and keeps the
-  one that sounds more like him.
+  one that sounds more like the speaker.
 
 **Learning per channel.** Approved reviews teach the channel (`~/dub/channels/NAME/`): spelling
 corrections you made or kept are applied next time without asking, unknown words you left are
@@ -51,13 +53,28 @@ for future translations (`memory.jsonl`). `--no-review` runs learn nothing.
 
 ```
 localdub check                                   is everything in place?
+localdub languages                               the languages it knows, and which it can dub into
 localdub run VIDEO --channel NAME                dub a whole video
+          [--from LANG --to LANG]                a new channel's languages (required the first time)
+          [--speaker man|woman]                  optional, for gendered languages (see below)
           [--start 1:00 --duration 2:30]         only an excerpt
           [--name NAME] [--no-review] [--shorts N]
 localdub run NAME                                continue a run (after a review or an error)
 localdub run NAME --redo STAGE                   redo from a stage on
 localdub shorts NAME [--lang dub|original] [--auto N] [--redo select|vision]
+localdub channel NAME [--speaker man|woman|none] a channel's settings
 ```
+
+### Languages
+
+A channel dubs from one language into another, set on its first run (`--from bg --to en`) and fixed
+after that, because what it learns (spellings, glossary, approved lines) belongs to that pair. The
+video can be in any language in `localdub languages` that Nemotron transcribes and that has a
+hunspell dictionary (English, German, French, Italian, Portuguese, Spanish, Russian, Bulgarian,
+Dutch, Polish, Ukrainian, Romanian, Czech, Swedish); the dub can be in any the voice model speaks
+(setting `tts_languages`: en, de, fr, it, pt, es, ru). For gendered languages (Spanish, Russian,
+German…) `--speaker man|woman` lets the translation get first-person forms right ("I was tired");
+nothing else uses it.
 
 ### The two reviews
 
@@ -66,7 +83,7 @@ and run `localdub run NAME` again.
 
 - **Review 1, the transcript**: only doubtful lines (new automatic fixes, guessed names, unknown
   words). On a channel's first video it lists the candidate voice samples with their "sounds like
-  him" scores: keep `voice: auto` (the best), write a number, a stretch (`voice: 01:20-01:38`) or a
+  the speaker" scores: keep `voice: auto` (the best), write a number, a stretch (`voice: 01:20-01:38`) or a
   WAV path. Nothing doubtful and a known voice: no stop.
 - **Review 2, the translation**: every line with its time slot and character budget; an empty `EN:`
   line stays silent; terms go under `glossary:` as `хлебарки = cockroaches`.
