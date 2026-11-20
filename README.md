@@ -44,6 +44,12 @@ language. localdub builds the speaker's voiceprint from their real speech in the
 - picks the takes: each line gets two good takes (passing the check, fitting the slot) and keeps the
   one that sounds more like the speaker.
 
+The score shortlists, the ear decides close calls: `localdub voice RUN` makes the candidates from any
+transcribed run, together with test clones of the channel's voice now, so they can be heard side by
+side (in the web app: *Voice…* on a run); `localdub voice RUN --pick 2` (or `current`, or a stretch
+like `01:20-01:38`) makes one the channel's voice, and `localdub run RUN --redo voice` re-dubs a
+finished run with it.
+
 **Learning per channel.** Approved reviews teach the channel (`~/dub/channels/NAME/`): spelling
 corrections you made or kept are applied next time without asking, unknown words you left are
 accepted, names and the glossary go to the translator, and every approved line becomes an example
@@ -62,6 +68,8 @@ localdub run VIDEO --channel NAME                dub a whole video
 localdub run NAME                                continue a run (after a review or an error)
 localdub run NAME --redo STAGE                   redo from a stage on
 localdub shorts NAME [--lang dub|original] [--auto N] [--redo select|vision]
+localdub voice NAME [--pick N|current|MM:SS-MM:SS]
+                                                 compare voice samples from a run, pick one
 localdub channel NAME [--speaker man|woman|none] a channel's settings
 ```
 
@@ -195,6 +203,9 @@ The API:
 | `GET` / `PUT /api/runs/<run>/review` | the file the run waits for: read it, save it (plain text) |
 | `POST /api/runs/<run>/continue` | go on after a review or an error, or render the picked Shorts |
 | `POST /api/runs/<run>/shorts` | propose Shorts for a finished run: `{"lang": "dub"}` or `"original"` |
+| `POST` / `GET /api/runs/<run>/voice` | make voice samples from the run's speech (with test clones, and of the channel's voice now); read them |
+| `POST /api/runs/<run>/voice/pick` | make one the channel's voice: `{"pick": 2}` or `{"pick": "current"}` |
+| `POST /api/runs/<run>/revoice` | dub a finished run again with the channel's voice |
 | `GET /api/videos`, `PUT /api/videos/<file>` | the uploaded videos; upload one (the body is the file) |
 | `GET /api/job`, `GET /api/job/events` | the current run (with its latest model requests and log), and live as Server-Sent Events |
 | `GET /api/status`, `GET /api/status/events` | the models llama-swap has running and each GPU's load, memory, temperature and power, live every 2 s |

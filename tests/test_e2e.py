@@ -49,6 +49,19 @@ def test_automatic_run_with_shorts(fake_env, capsys):
     assert "part00.wav" in heard and any("-s42.wav" in f for f in heard)  # transcription and take checks, over HTTP
     assert (run / "vocals.wav").exists() and (run / "music.wav").exists()  # separated through the Demucs wrapper
 
+    # later: compare voice samples from this run with the channel's voice now, and pick another one
+    assert main(["voice", "auto", "--json"]) == 3
+    assert events_of(capsys)[-1]["waiting_for"]["kind"] == "voice"
+    found = json.loads((run / "voice-candidates.json").read_text())
+    assert found["version"] == 2 and found["picked"] is None and found["current"]["from"].startswith("auto, ")
+    for sample in found["candidates"] + [found["current"]]:
+        assert len(sample["tests"]) == 4 and all((run / t).exists() for t in sample["tests"])  # 4 test sentences
+    other = found["candidates"][-1]["n"]
+    assert main(["voice", "auto", "--pick", str(other)]) == 0
+    profile = json.loads((fake_env["home"] / "channels" / "auto" / "profile.json").read_text())
+    assert f"auto, candidate {other} " in profile["voice_from"]
+    assert json.loads((run / "voice-candidates.json").read_text())["picked"] == other
+
 
 def test_reviewed_run_teaches_the_channel(fake_env, capsys):
     """Nemotron and Demucs run on this machine (the local backends), only the LLMs and TTS on the server."""

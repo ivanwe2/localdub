@@ -42,7 +42,8 @@ pub struct RunSummary {
 /// then the run is continued.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Waiting {
-    /// "review1" (the transcript), "review2" (the translation) or "shorts" (picking Shorts).
+    /// "review1" (the transcript), "review2" (the translation), "voice" (picking a voice sample)
+    /// or "shorts" (picking Shorts).
     pub kind: String,
     /// For Shorts: whose candidates, "dub" or "original".
     pub lang: Option<String>,
@@ -191,6 +192,15 @@ async fn waiting_for(dir: &Path, state: &StateFile, finished: bool) -> Option<Wa
                 });
             }
         }
+    }
+    if crate::voice::waits_for_pick(dir).await {
+        return Some(Waiting {
+            kind: "voice".to_string(),
+            lang: None,
+            file: crate::voice::SAMPLES_FILE.to_string(),
+        });
+    }
+    if !finished {
         return None;
     }
     for lang in ["original", "dub"] {
@@ -357,6 +367,30 @@ mod tests {
 
         assert_eq!(waiting(home.path(), "early").await, None);
         assert_eq!(waiting(home.path(), "skipped").await, None);
+    }
+
+    #[tokio::test]
+    async fn a_run_waits_for_a_voice_pick_once_samples_are_made_but_a_review_comes_first() {
+        let home = tempfile::tempdir().unwrap();
+        write_run(
+            home.path(),
+            "market",
+            r#"{"source": "/v.mp4", "channel": "c", "created": "2026-11-20T10:00:00",
+                "done": ["prep", "separate", "transcribe", "spelling"]}"#,
+        );
+        let dir = home.path().join("runs").join("market");
+        fs::write(
+            dir.join("voice-candidates.json"),
+            r#"{"version": 2, "lang": "en", "lines": [], "scored": false, "candidates": [], "current": null, "picked": null}"#,
+        )
+        .unwrap();
+
+        let voice = waiting(home.path(), "market").await;
+        fs::write(dir.join("review-1-transcript.txt"), "status: pending\n").unwrap();
+        let review = waiting(home.path(), "market").await;
+
+        assert_eq!(voice.map(|w| w.kind).as_deref(), Some("voice"));
+        assert_eq!(review.map(|w| w.kind).as_deref(), Some("review1"));
     }
 
     #[tokio::test]

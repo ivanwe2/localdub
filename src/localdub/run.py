@@ -3,6 +3,7 @@
     localdub run VIDEO --channel NAME --from bg --to en [--start 1:00 --duration 2:30]
                                    a new channel needs its languages; later runs just --channel NAME
     localdub run NAME              continue a run (after a review, or after an error)
+    localdub voice NAME            compare voice samples from a run, then --pick one for the channel
     localdub channel NAME          a channel's settings (--speaker man|woman|none to change it)
     localdub languages             the languages localdub knows
     localdub check                 is everything it needs in place?
@@ -15,6 +16,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import difflib
+import hashlib
 import json
 import re
 import shutil
@@ -297,68 +299,155 @@ def run_voiceprint(run: Run, embedder, segs: list[dict]):
     return vp
 
 
-def score_candidates(run: Run, ctx: Ctx, segs: list[dict], cands: list[dict]) -> None:
-    """Clone a few test sentences from each candidate sample; rank the samples by how much the clones
-    sound like the speaker's real voice. Leaves the order alone if the speaker model isn't available."""
+# --- the voice sample: candidates to listen to, compare and pick ----------------------------------
+
+CANDIDATES = "voice-candidates.json"
+
+
+def load_candidates(run: Run) -> dict | None:
+    """The run's voice-candidates.json, as version 2 (see make_candidates). A version 1 file (a list,
+    sorted by score and numbered by position in review 1) is read as one, numbered the same way."""
+    path = run.p(CANDIDATES)
+    if not path.exists():
+        return None
+    data = read_json(path)
+    if isinstance(data, list):
+        data = {"version": 2, "lines": [], "candidates": [{**c, "n": n, "tests": []} for n, c in enumerate(data, start=1)],
+                "current": None, "picked": None}
+    return data
+
+
+def _md5(path: Path) -> str:
+    return hashlib.md5(path.read_bytes()).hexdigest()
+
+
+def clone_tests(run: Run, ctx: Ctx, sample: Path, lines: list[str]) -> list[str]:
+    """The test sentences cloned from this voice sample, as files in the run's voice-candidates/
+    (paths relative to the run). They are named after the sample's and the sentences' checksums, so
+    asking again for the same sample costs nothing."""
     import base64
+    lang = ctx.profile["target_lang"]
+    key = hashlib.md5((_md5(sample) + lang + "\n".join(lines)).encode()).hexdigest()[:10]
+    sample_b64 = None
+    out = []
+    for i, line in enumerate(lines, start=1):
+        rel = f"voice-candidates/test-{key}-{i}.wav"
+        trim = run.p(rel)
+        if not trim.exists():
+            sample_b64 = sample_b64 or base64.b64encode(sample.read_bytes()).decode()
+            raw = trim.with_suffix(".raw.wav")
+            raw.write_bytes(ctx.server.tts(ctx.settings["tts_model"], line, lang, sample_b64, 42))
+            media.trim_silence(raw, trim, RATE)
+            raw.unlink()
+        out.append(rel)
+    return out
+
+
+def make_candidates(run: Run, ctx: Ctx, segs: list[dict], current: bool) -> dict:
+    """Up to 3 voice-sample candidates from the run's separated speech (the cleanest stretches of
+    10-20 s), and with `current` the channel's voice now. Each gets the dub language's test sentences
+    cloned from it; with the speaker model installed, each is scored by how much its clones sound
+    like the speaker's real voice, and the list is sorted by that. Written to voice-candidates.json:
+      {"version": 2, "lang", "lines": [test sentences], "scored": bool, "picked": null,
+       "candidates": [{"n", "start", "end", "ids", "snr_db", "path", "tests": [paths], "sim"}],
+       "current": {"from", "path", "tests", "sim"} or null}
+    `n` stays with its stretch whatever the order (review 1's and --pick's numbers); paths are
+    relative to the run."""
     from .speaker import embed_files, get_embedder, similarity
     target = languages.LANGUAGES.get(ctx.profile["target_lang"])
     lines = list(target.calibration) if target else []
-    embedder = get_embedder(ctx.settings) if lines else None
-    if embedder is None:
-        return
-    vp = run_voiceprint(run, embedder, segs)
-    if vp is None:
-        return
-    log(f"   cloning {len(lines)} test sentences from each of {len(cands)} candidate samples to compare them")
-    for k, c in enumerate(cands, start=1):
-        sample_b64 = base64.b64encode(Path(c["path"]).read_bytes()).decode()
-        files = []
-        for i, line in enumerate(lines, start=1):
-            raw, trim = run.p(f"voice-candidates/candidate-{k}-test-{i}.raw.wav"), run.p(f"voice-candidates/candidate-{k}-test-{i}.wav")
-            if not trim.exists():
-                raw.write_bytes(ctx.server.tts(ctx.settings["tts_model"], line, ctx.profile["target_lang"], sample_b64, 42))
-                media.trim_silence(raw, trim, RATE)
-                raw.unlink()
-            files.append(trim)
-        c["sim"] = round(float(np.mean([similarity(e, vp) for e in embed_files(embedder, files)])), 3)
-        log(f"   candidate {k} ({media.mmss(c['start'])}-{media.mmss(c['end'])}): sounds like the speaker {c['sim']:.2f}")
-    cands.sort(key=lambda c: -c["sim"])
+    run.p("voice-candidates").mkdir(exist_ok=True)
+    found = voice_candidates(segs, run.p("vocals.wav"), run.p("music.wav"), k=3)
+    cands = []
+    for n, c in enumerate(found, start=1):
+        rel = f"voice-candidates/candidate-{n}.wav"
+        cut_voice(run.p("vocals.wav"), c["start"], c["end"], run.p(rel))
+        cands.append({**c, "n": n, "path": rel, "sim": None})
+    cur = None
+    voice = ctx.profile.voice_path
+    if current and voice is not None and voice.exists():
+        rel = f"voice-candidates/current-{_md5(voice)[:10]}.wav"
+        if not run.p(rel).exists():
+            shutil.copyfile(voice, run.p(rel))
+        cur = {"from": ctx.profile.data.get("voice_from") or "", "path": rel, "sim": None}
+    samples = cands + ([cur] if cur else [])
+    if lines and samples:
+        log(f"   cloning {len(lines)} test sentences from each of {len(samples)} voice samples to compare them")
+    for s in samples:
+        s["tests"] = clone_tests(run, ctx, run.p(s["path"]), lines) if lines else []
+    embedder = get_embedder(ctx.settings) if lines and samples else None
+    vp = run_voiceprint(run, embedder, segs) if embedder is not None else None
+    if vp is not None:
+        for s in samples:
+            sims = [similarity(e, vp) for e in embed_files(embedder, [run.p(t) for t in s["tests"]])]
+            s["sim"] = round(float(np.mean(sims)), 3)
+        for c in cands:
+            log(f"   candidate {c['n']} ({media.mmss(c['start'])}-{media.mmss(c['end'])}): "
+                f"sounds like the speaker {c['sim']:.2f}")
+        if cur:
+            log(f"   the channel's voice now: sounds like the speaker {cur['sim']:.2f}")
+        cands.sort(key=lambda c: -c["sim"])
+    data = {"version": 2, "lang": ctx.profile["target_lang"], "lines": lines, "scored": vp is not None,
+            "candidates": cands, "current": cur, "picked": None}
+    write_json(run.p(CANDIDATES), data)
+    return data
 
 
 def set_voice(run: Run, profile: Profile, choice: str) -> str:
+    """Makes `choice` the channel's voice sample and says where it came from: "auto" (the best
+    candidate), a candidate's number, a stretch of this video ("01:20-01:38") or a WAV file's path.
+    The run's voice-candidates.json records the pick."""
     dst = profile.dir / "voice.wav"
     profile.dir.mkdir(parents=True, exist_ok=True)
     choice = choice.strip()
-    cands = read_json(run.p("voice-candidates.json")) if run.p("voice-candidates.json").exists() else []
+    data = load_candidates(run)
+    cands = data["candidates"] if data else []
     if choice.lower() in ("", "auto") or choice.isdigit():
-        k = int(choice) if choice.isdigit() else 1
-        cand = Path(cands[k - 1]["path"]) if 0 < k <= len(cands) else run.p("voice-sample.wav")
-        if not choice or not cand.exists():
-            raise RuntimeError("review 1 needs a voice sample: write a candidate's number, a stretch like "
-                               "'voice: 01:20-01:38' or a WAV file's path on the voice line")
-        shutil.copyfile(cand, dst)
-        sim = f", sounds like the speaker {cands[k - 1]['sim']:.2f}" if cands and cands[k - 1].get("sim") is not None else ""
-        source = f"{run.name}, candidate {k} ({media.mmss(cands[k - 1]['start'])}-{media.mmss(cands[k - 1]['end'])}{sim})" \
-            if 0 < k <= len(cands) else f"{run.name}, picked automatically"
+        if choice.isdigit():
+            cand = next((c for c in cands if c["n"] == int(choice)), None)
+            if cand is None:
+                raise RuntimeError(f"there is no voice candidate {choice} (there are: "
+                                   f"{', '.join(str(c['n']) for c in cands) or 'none'})")
+        else:
+            cand = cands[0] if cands else None
+        sample = run.p(cand["path"]) if cand else run.p("voice-sample.wav")
+        if not choice or not sample.exists():
+            raise RuntimeError("a voice sample is needed: a candidate's number, a stretch like "
+                               "'voice: 01:20-01:38' or a WAV file's path")
+        shutil.copyfile(sample, dst)
+        if cand:
+            sim = f", sounds like the speaker {cand['sim']:.2f}" if cand.get("sim") is not None else ""
+            source = f"{run.name}, candidate {cand['n']} ({media.mmss(cand['start'])}-{media.mmss(cand['end'])}{sim})"
+        else:
+            source = f"{run.name}, picked automatically"
+        picked = cand["n"] if cand else "auto"
     elif choice.lower().endswith(".wav"):
         f = Path(choice).expanduser()
         if not f.exists():
-            raise RuntimeError(f"review 1: voice file {f} not found")
+            raise RuntimeError(f"voice file {f} not found")
         media.ffmpeg("-i", f, "-ac", "1", "-ar", RATE, "-c:a", "pcm_s16le", dst)
-        source = str(f)
+        source = picked = str(f)
     else:
         try:
             a, b = (media.parse_mmss(x) for x in choice.split("-", 1))
         except ValueError:
-            raise RuntimeError(f"review 1: can't read the voice line '{choice}' (expected e.g. 01:20-01:38)") from None
+            raise RuntimeError(f"can't read the voice choice '{choice}' (expected e.g. 01:20-01:38)") from None
         if not 5 <= b - a <= 30:
-            raise RuntimeError("review 1: the voice stretch should be 5-30 seconds long (10-20 is best)")
+            raise RuntimeError("the voice stretch should be 5-30 seconds long (10-20 is best)")
         cut_voice(run.p("vocals.wav"), a, b, dst)
         source = f"{run.name} {choice}"
+        picked = choice
     profile["voice_ref"] = "voice.wav"
     profile["voice_from"] = source
+    mark_picked(run, data, picked)
     return source
+
+
+def mark_picked(run: Run, data: dict | None, picked) -> None:
+    """Records the pick in the run's voice-candidates.json, so it no longer waits for one."""
+    if data is not None:
+        data["picked"] = picked
+        write_json(run.p(CANDIDATES), data)
 
 
 def stage_review1(run: Run, ctx: Ctx):
@@ -370,15 +459,9 @@ def stage_review1(run: Run, ctx: Ctx):
     if not path.exists():
         voice = None
         if not has_voice:
-            cands = voice_candidates(segs, run.p("vocals.wav"), run.p("music.wav"), k=3)
-            if cands:
-                run.p("voice-candidates").mkdir(exist_ok=True)
-                for k, c in enumerate(cands, start=1):
-                    c["path"] = str(run.p(f"voice-candidates/candidate-{k}.wav"))
-                    cut_voice(run.p("vocals.wav"), c["start"], c["end"], Path(c["path"]))
-                score_candidates(run, ctx, segs, cands)
-                write_json(run.p("voice-candidates.json"), cands)
-                voice = {"candidates": cands}
+            data = make_candidates(run, ctx, segs, current=False)
+            if data["candidates"]:  # the review shows where they are
+                voice = {"candidates": [{**c, "path": str(run.p(c["path"]))} for c in data["candidates"]]}
             else:
                 voice = {"path": None}
         count = review.write_transcript_review(path, segs, report, voice, profile["source_lang"])
@@ -397,7 +480,11 @@ def stage_review1(run: Run, ctx: Ctx):
     if parsed["status"] != "approved":
         return waiting(ctx, "review1", "Review 1 of 2 is still waiting for you", path)
     n = learn_transcript(parsed, segs, report, profile)
-    if parsed["voice"] is not None or not has_voice:
+    data = load_candidates(run)
+    picked_meanwhile = data is not None and data.get("picked") is not None and has_voice  # localdub voice --pick
+    if picked_meanwhile and (parsed["voice"] or "auto").lower() == "auto":
+        log(f"   voice sample: {profile.data.get('voice_from') or 'as picked'} (picked with localdub voice)")
+    elif parsed["voice"] is not None or not has_voice:
         log(f"   voice sample: {set_voice(run, profile, parsed['voice'] or 'auto')}")
     profile.save()
     run.segs = segs
@@ -872,6 +959,50 @@ def cmd_shorts(args) -> int:
     return rc
 
 
+def cmd_voice(args) -> int:
+    """`localdub voice RUN`: voice-sample candidates from the run's speech and the channel's voice
+    now, each with test sentences cloned from it (and scored), to listen to and compare; waits for a
+    pick (exit 3). `--pick N|current|MM:SS-MM:SS|file.wav` makes that the channel's voice."""
+    run = Run(args.name)
+    events.note(run=run.name, dir=str(run.dir))
+    if not run.state:
+        return fail(f"no run called '{args.name}' in {home() / 'runs'}")
+    segs_file = run.p("segments.json") if run.p("segments.json").exists() else run.p("spelled.json")
+    if not (segs_file.exists() and run.p("vocals.wav").exists()):
+        return fail(f"run '{run.name}' isn't transcribed yet: voice samples come from its separated speech "
+                    f"(localdub run {run.name} gets it there)")
+    profile = Profile(run.state["channel"])
+    events.emit("start", command="voice", run=run.name, channel=profile.name, dir=str(run.dir))
+    if args.pick is not None:
+        if args.pick == "current":
+            if profile.voice_path is None or not profile.voice_path.exists():
+                return fail(f"channel '{profile.name}' has no voice yet: pick a candidate")
+            source = profile.data.get("voice_from") or "the channel's voice"
+            mark_picked(run, load_candidates(run), "current")
+        else:
+            try:
+                source = set_voice(run, profile, args.pick)
+            except RuntimeError as e:
+                return fail(str(e))
+            profile.save()
+        events.note(voice=source)
+        log(f"localdub: channel '{profile.name}' now dubs with: {source}")
+        log(f"   to re-dub this run with it: localdub run {run.name} --redo voice")
+        return 0
+    settings = load_settings()
+    ctx = Ctx(settings, profile, Server(settings), False, f"localdub voice {run.name}")
+    log(f"localdub: voice samples for channel '{profile.name}' from run '{run.name}'")
+    data = make_candidates(run, ctx, upgrade_all(read_json(segs_file)), current=True)
+    if not data["candidates"] and not data["current"]:
+        return fail("no clean stretch of 10-20 s of speech was found; give one with --pick 01:20-01:38")
+    if not data["scored"]:
+        log("   (no scores: the speaker model isn't installed, pip install localdub[voice]; listen to choose)")
+    events.note(waiting_for={"kind": "voice", "file": str(run.p(CANDIDATES))})
+    log(f"\n== Listen and compare: {run.p('voice-candidates')}")
+    log(f"   then: localdub voice {run.name} --pick N (or current, or a stretch like 01:20-01:38)")
+    return 3
+
+
 def channel_names() -> list[str]:
     """Every channel with a saved profile."""
     root = home() / "channels"
@@ -983,6 +1114,12 @@ def main(argv=None) -> int:
                    help="dub: the dubbed video (default); original: the creator's own audio and language")
     s.add_argument("--auto", type=int, default=0, metavar="N", help="render the top N candidates without stopping")
     s.add_argument("--redo", choices=["vision", "select"], help="look at the video again / propose new candidates")
+    v = sub.add_parser("voice", parents=[common],
+                       help="compare voice samples from a run (and the channel's voice now), and pick one")
+    v.add_argument("name", help="the run's name (it must be transcribed)")
+    v.add_argument("--pick", metavar="CHOICE",
+                   help="make this the channel's voice: a candidate's number, 'current' (keep it), a stretch "
+                        "of the run's video (01:20-01:38) or a WAV file")
     sub.add_parser("check", parents=[common], help="check that the tools, models and server are in place")
     c = sub.add_parser("channel", parents=[common], help="show a channel's settings, or change who speaks")
     c.add_argument("name", help="the channel's name")
@@ -994,8 +1131,8 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     events.configure(args.json)
     try:
-        commands = {"run": cmd_run, "shorts": cmd_shorts, "check": cmd_check, "channel": cmd_channel,
-                    "languages": cmd_languages}
+        commands = {"run": cmd_run, "shorts": cmd_shorts, "voice": cmd_voice, "check": cmd_check,
+                    "channel": cmd_channel, "languages": cmd_languages}
         rc = commands[args.cmd](args)
     except Exception as e:  # a bug, not a handled error: still end the event stream with a result
         events.note(error=f"{type(e).__name__}: {e}")
