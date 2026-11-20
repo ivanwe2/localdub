@@ -110,8 +110,12 @@ def test_the_languages_command_tells_install_scripts_which_dictionaries_to_insta
     channel_profile("market", flags("ru", "en"), DEFAULT_SETTINGS)
 
     assert main(["languages", "--apt", "de", "bg"]) == 0
-
     assert capsys.readouterr().out.split() == ["hunspell-bg", "hunspell-de-de", "hunspell-ru"]
+
+    assert main(["languages", "--apt", "all"]) == 0  # what install.sh installs by default
+    every = capsys.readouterr().out.split()
+    with_dictionary = [lang for lang in languages.LANGUAGES.values() if lang.apt]
+    assert len(every) == len(with_dictionary) and "hunspell-sv" in every and "myspell-et" in every
 
 
 def test_the_channel_command_shows_and_changes_the_speaker(home, capsys):
@@ -161,6 +165,7 @@ def test_a_run_without_its_dictionary_stops_before_any_gpu_work(home, monkeypatc
     assert rc == 1
     assert "German spelling dictionary (de_DE) isn't installed: apt-get install hunspell-de-de" in capsys.readouterr().err
     assert not (home / "runs" / "talk" / "state.json").exists(), "no run was made"
+    assert not (home / "channels" / "market" / "profile.json").exists(), "nor the channel: a new try may pick other languages"
 
 
 def test_a_language_without_a_dictionary_skips_spelling_fixes():

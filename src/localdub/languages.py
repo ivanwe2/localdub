@@ -130,6 +130,20 @@ LANGUAGES: dict[str, Language] = {
         Language("ro", "Romanian", "ron", "ro_RO", "hunspell-ro", "ro", ".", "la sută", {"dl": "domnul", "dna": "doamna"}),
         Language("cs", "Czech", "ces", "cs_CZ", "hunspell-cs", "cs", " ", "procent"),
         Language("sv", "Swedish", "swe", "sv_SE", "hunspell-sv", "sv", " ", "procent"),
+        # more video languages the transcription model hears (Nemotron 3.5); Finnish has no hunspell
+        # dictionary in Debian, so its spelling fixes are skipped
+        Language("tr", "Turkish", "tur", "tr_TR", "hunspell-tr", "tr", ".", "yüzde", {"dr": "doktor", "prof": "profesör"}),
+        Language("nb", "Norwegian", "nob", "nb_NO", "hunspell-no", "no", " ", "prosent"),
+        Language("da", "Danish", "dan", "da_DK", "hunspell-da", "da", ".", "procent"),
+        Language("fi", "Finnish", "fin", "", "", "fi", " ", "prosenttia"),
+        Language("hr", "Croatian", "hrv", "hr_HR", "hunspell-hr", None, ".", "posto"),
+        Language("sk", "Slovak", "slk", "sk_SK", "hunspell-sk", "sk", " ", "percent"),
+        Language("hu", "Hungarian", "hun", "hu_HU", "hunspell-hu", "hu", " ", "százalék"),
+        Language("et", "Estonian", "est", "et_EE", "myspell-et", None, " ", "protsenti"),
+        Language("el", "Greek", "ell", "el_GR", "hunspell-el", None, ".", "τοις εκατό"),
+        Language("lt", "Lithuanian", "lit", "lt_LT", "hunspell-lt", "lt", " ", "procentų"),
+        Language("lv", "Latvian", "lav", "lv_LV", "hunspell-lv", "lv", " ", "procenti"),
+        Language("sl", "Slovenian", "slv", "sl_SI", "hunspell-sl", "sl", ".", "odstotkov"),
     ]
 }
 
