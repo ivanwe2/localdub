@@ -178,13 +178,40 @@ export async function startRun(request: StartRequest): Promise<Job> {
   return (await check(response)).json();
 }
 
-async function post(path: string, body: unknown = {}): Promise<Job> {
+async function post<T = Job>(path: string, body: unknown = {}): Promise<T> {
   const response = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   return (await check(response)).json();
+}
+
+/** A video downloaded from a link with yt-dlp on the server (server/src/download.rs). */
+export interface Download {
+  url: string;
+  state: "downloading" | "done" | "failed";
+  title: string | null;
+  /** Which file is coming now, from 1 (0: not started yet), of how many: picture, then sound. */
+  part: number;
+  parts: number;
+  downloaded_bytes: number | null; // of the file coming now
+  total_bytes: number | null;
+  speed_bps: number | null;
+  eta_s: number | null;
+  video: Video | null; // when done
+  error: string | null;
+  log: string[]; // yt-dlp's warnings and errors
+}
+
+/** Downloads the video at this link into the server's videos folder (one download at a time). */
+export function startDownload(url: string): Promise<Download> {
+  return post<Download>("/api/downloads", { url });
+}
+
+/** Calls `onDownload` with the download now and every time it changes; returns a stop function. */
+export function followDownload(onDownload: (download: Download | null) => void): () => void {
+  return follow("/api/download/events", onDownload);
 }
 
 const runPath = (run: string) => `/api/runs/${encodeURIComponent(run)}`;

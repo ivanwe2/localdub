@@ -1,10 +1,12 @@
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { type FormEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import {
   type Call,
   type Channel,
   continueRun,
+  type Download,
   fileUrl,
+  followDownload,
   followJob,
   followStatus,
   getReview,
@@ -18,6 +20,7 @@ import {
   type Review,
   type RunSummary,
   saveReview,
+  startDownload,
   startRun,
   type Status,
   uploadVideo,
@@ -28,8 +31,11 @@ import {
   candidates,
   defaultTarget,
   dictionaryNote,
+  downloadText,
   findChannel,
   languageFields,
+  nameFromTitle,
+  partShare,
   setVoiceLine,
   voiceLine,
   formatBytes,
@@ -236,6 +242,81 @@ function remember(key: string, value: string) {
   }
 }
 
+/**
+ * Downloading a video from a link with yt-dlp on the server, live from /api/download/events. It
+ * runs beside a dub (it needs no GPU). When a download this page saw going is done, `onDone` gets it.
+ */
+function DownloadBox({ onDone }: { onDone: (download: Download) => void }) {
+  const [url, setUrl] = useState("");
+  const [download, setDownload] = useState<Download | null>(null);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const seen = useRef<Download["state"] | undefined>(undefined);
+
+  useEffect(() => followDownload(setDownload), []);
+  useEffect(() => {
+    if (seen.current === "downloading" && download?.state === "done") onDone(download);
+    seen.current = download?.state;
+  }, [download, onDone]);
+
+  const going = download?.state === "downloading";
+  async function start() {
+    if (!url.trim() || going) return;
+    setError(null);
+    setSending(true);
+    try {
+      await startDownload(url.trim()); // its progress comes through followDownload
+      setUrl("");
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function onKey(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter") return;
+    event.preventDefault(); // Enter here downloads; it doesn't start the run
+    void start();
+  }
+
+  const share = download ? partShare(download) : 0;
+  return (
+    <div className="download">
+      <div className="row">
+        <label>
+          …or download it from a link
+          <input
+            type="url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            onKeyDown={onKey}
+            placeholder="https://www.youtube.com/watch?v=…"
+          />
+        </label>
+        <button type="button" className="secondary" disabled={!url.trim() || going || sending} onClick={() => void start()}>
+          {going ? "Downloading…" : sending ? "Starting…" : "Download"}
+        </button>
+      </div>
+      <p className="muted small">Only videos you have the rights to dub.</p>
+      {going && (
+        <div aria-live="polite">
+          <div className="muted">{download.title ?? download.url}</div>
+          <div className="bar" role="progressbar" aria-valuenow={Math.round(share * 100)} aria-valuemin={0} aria-valuemax={100}>
+            <div style={{ width: `${share * 100}%` }} />
+          </div>
+          <p className="muted small">{downloadText(download)}</p>
+        </div>
+      )}
+      {download?.state === "done" && download.video && (
+        <p className="muted small">Downloaded: {download.video.name}</p>
+      )}
+      {download?.state === "failed" && <p className="error">The download failed: {download.error}</p>}
+      {error && <p className="error">{error}</p>}
+    </div>
+  );
+}
+
 /** The form that starts a run (POST /api/runs), with uploading the video. */
 function NewRun({ busy }: { busy: boolean }) {
   const [videos, setVideos] = useState<Video[]>([]);
@@ -285,9 +366,14 @@ function NewRun({ busy }: { busy: boolean }) {
       });
   }, [isNew, languages]);
 
-  function chooseVideo(path: string) {
+  function chooseVideo(path: string, title?: string) {
     setVideo(path);
-    if (!nameEdited) setName(suggestName(path));
+    if (!nameEdited) setName((title && nameFromTitle(title)) || suggestName(path));
+  }
+
+  function downloaded(download: Download) {
+    refreshVideos();
+    if (download.video) chooseVideo(download.video.path, download.title ?? undefined);
   }
 
   async function uploadFile(file: File) {
@@ -364,6 +450,7 @@ function NewRun({ busy }: { busy: boolean }) {
             <div style={{ width: `${upload * 100}%` }} />
           </div>
         )}
+        <DownloadBox onDone={downloaded} />
         <label>
           …or a path on the server
           <input value={video} onChange={(e) => chooseVideo(e.target.value)} placeholder="/root/dub/excerpt.mp4" required />

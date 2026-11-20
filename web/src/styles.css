@@ -410,3 +410,16 @@ button.play.on {
   height: 100%;
   background: var(--ok);
 }
+
+/* downloading from a link: the button lines up with the link's field */
+.download .row {
+  align-items: flex-end;
+}
+
+.download .row button {
+  margin-bottom: 12px;
+}
+
+.download p {
+  margin: 0 0 12px;
+}
