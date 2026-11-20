@@ -41,7 +41,7 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 | `src/localdub/shorts.py` | motion, vision, candidates, captions, rendering |
 | `src/localdub/review.py`, `media.py`, `asr.py`, `settings.py` | review files, ffmpeg, Nemotron (http or local backend), defaults + channel profiles |
 | `tests/` | unit tests; `test_e2e.py` runs whole videos against `tests/fakes/` (fake llama-swap + the real Demucs wrapper; one run http, one local) |
-| `deploy/install.sh` | install/update on CT 103 from git into the Demucs venv |
+| `deploy/install.sh` | install/update on CT 103 from git into the Demucs venv, plus the channels' hunspell dictionaries (`LANGS="de fr"` for new ones) |
 | `deploy/gpu/` | the GPU box: `llama-swap.yaml` (models + groups), `demucs_server.py` (Demucs over HTTP), `llama-swap.service` |
 | `server/src/` | Rust server: `lib.rs` (routes: `/api/…`, `/files/…`, the page), `runs.rs` (runs on disk), `events.rs` (engine `--json` lines), `runner.rs` (runs the engine), `job.rs` (the current run), `start.rs` (POST /api/runs: validation, engine args), `main.rs` (env settings); `testdata/fake-localdub.sh` |
 | `deploy/server/` | the web app on a Linux box: `build.sh` (dev container or CI → `dist/localdub-app.tar.gz`: static musl server + page + `BUILD`), `install.sh` (→ `/opt/localdub`, systemd `localdub-server`, 127.0.0.1:8080; refuses while a run is going unless `--force`; laptop uses `ssh -N -L 8080:127.0.0.1:8080`) |
@@ -147,7 +147,6 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 - Log noise from the speaker model (torch `key_padding_mask` warning, HF Hub token notice).
 - Separation uploads `audio44.wav` as WAV (~300 MB for 30 min) and gets two WAVs back; FLAC would
   halve that once localdub and the GPU box are on different machines.
-- `localdub check` tests the hunspell `bg_BG` dictionary only; it should check the channels' dictionaries.
 - Shorts selection takes ~2 min per language even on a 3-minute excerpt (~10K tokens at effort "low").
 - llama-servers behind llama-swap inherit `LLAMA_API_KEY` and check it again; llama-swap's own
   unauthenticated call after a health check logs `unauthorized: Invalid API Key` (harmless).

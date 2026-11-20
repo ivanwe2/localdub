@@ -636,6 +636,8 @@ def cmd_run(args) -> int:
             checked = channel_profile(args.channel, args, settings)  # before the run exists: fail cleanly
             if isinstance(checked, str):
                 return fail(checked)
+            if missing := missing_dictionary(checked):
+                return fail(missing)
             run.state = {"source": str(target.resolve()), "channel": args.channel, "start": start, "length": length,
                          "created": dt.datetime.now().isoformat(timespec="seconds"), "done": [], "timings": {}}
             run.save()
@@ -657,6 +659,8 @@ def cmd_run(args) -> int:
                 shutil.rmtree(p) if p.is_dir() else p.unlink(missing_ok=True)
         run.save()
     profile = checked
+    if not {"spelling", "review1"} <= set(st["done"]) and (missing := missing_dictionary(profile)):
+        return fail(missing)  # the spelling stages need it: say so now, not after the GPU work
     ctx = Ctx(settings, profile, Server(settings), args.no_review, f"localdub run {run.name}")
     log(f"localdub: run '{run.name}' (channel '{st['channel']}') in {run.dir}")
     events.emit("start", command="run", run=run.name, channel=st["channel"], dir=str(run.dir),
@@ -722,12 +726,17 @@ def cmd_check(args) -> int:
     cfg = home() / "settings.json"
     log(f"localdub check (settings: {cfg}{'' if cfg.exists() else ', defaults'})")
     for tool in ("ffmpeg", "ffprobe", "hunspell"):
-        line(shutil.which(tool) is not None, tool, f"apt-get install {'ffmpeg' if tool != 'hunspell' else 'hunspell hunspell-bg'}")
-    try:
-        Speller("bg_BG", []).unknown(["къща"])
-        line(True, "hunspell bg_BG dictionary")
-    except Exception as e:  # noqa: BLE001
-        line(False, "hunspell bg_BG dictionary", f"apt-get install hunspell-bg ({e})")
+        line(shutil.which(tool) is not None, tool, f"apt-get install {tool if tool != 'ffprobe' else 'ffmpeg'}")
+    dictionaries: dict[str, list[str]] = {}  # the dictionaries the channels need, and which channels
+    for name in channel_names():
+        if dict_name := Profile(name)["hunspell_dict"]:
+            dictionaries.setdefault(dict_name, []).append(name)
+    if not dictionaries:
+        log("  (no channels yet: their spelling dictionaries are checked once they exist; see localdub languages)")
+    for dict_name, users in sorted(dictionaries.items()):
+        problem = missing_dictionary(Profile(users[0]))
+        line(problem is None, f"hunspell {dict_name} dictionary (channel {', '.join(users)})",
+             problem.split(": ", 1)[-1] if problem else "")
     nemo, d = settings["nemo"], settings["demucs"]
     for tool, backend in (("nemo", nemo["backend"]), ("demucs", d["backend"])):
         line(backend in ("http", "local"), f"{tool}.backend: {backend}", 'use "http" (the model server) or "local"')
@@ -878,6 +887,18 @@ def dictionary_installed(name: str) -> bool:
         return True
     except (RuntimeError, OSError):
         return False
+
+
+def missing_dictionary(profile: Profile) -> str | None:
+    """Why the channel's spelling dictionary can't be used (with what to install), or None if it can.
+    A language without a dictionary is fine: its spelling fixes are skipped."""
+    name = profile["hunspell_dict"]
+    if not name or dictionary_installed(name):
+        return None
+    lang = languages.LANGUAGES.get(profile["source_lang"])
+    package = lang.apt if lang and lang.apt else f"the hunspell {name} dictionary"
+    return (f"the {profile['source_language_name']} spelling dictionary ({name}) isn't installed: "
+            f"apt-get install {package}")
 
 
 def channel_info(profile: Profile) -> dict:
