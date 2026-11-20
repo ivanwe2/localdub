@@ -50,9 +50,9 @@ def write_transcript_review(path: Path, segs: list[dict], report: dict, voice: d
             "cleanest first (install the speaker model to rank them by likeness):"))
         for k, c in enumerate(voice["candidates"], start=1):
             sim = f"   sounds like the speaker: {c['sim']:.2f}" if c.get("sim") is not None else ""
-            lines.append(f"#   {k}. {mmss(c['start'])}-{mmss(c['end'])}{sim}   {c['path']}")
+            lines.append(f"#   {c.get('n', k)}. {mmss(c['start'])}-{mmss(c['end'])}{sim}   {c['path']}")
         lines += [
-            "#   Listen to them. 'voice: auto' takes number 1; or write a number (voice: 2), a stretch of this",
+            "#   Listen to them. 'voice: auto' takes the first one listed; or write its number (voice: 2), a stretch of this",
             "#   video (voice: 01:20-01:38, 10-20 s of clear speech) or a WAV file's path.",
             "voice: auto",
             "",
