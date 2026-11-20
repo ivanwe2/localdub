@@ -43,7 +43,7 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 | `tests/` | unit tests; `test_e2e.py` runs whole videos against `tests/fakes/` (fake llama-swap + the real Demucs wrapper; one run http, one local) |
 | `deploy/install.sh` | install/update on CT 103 from git into the Demucs venv, plus the channels' hunspell dictionaries (`LANGS="de fr"` for new ones) |
 | `deploy/gpu/` | the GPU box: `llama-swap.yaml` (models + groups), `demucs_server.py` (Demucs over HTTP), `llama-swap.service` |
-| `server/src/` | Rust server: `lib.rs` (routes: `/api/…`, `/files/…`, the page), `runs.rs` (runs on disk), `events.rs` (engine `--json` lines), `runner.rs` (runs the engine), `job.rs` (the current run), `start.rs` (POST /api/runs: validation, engine args), `main.rs` (env settings); `testdata/fake-localdub.sh` |
+| `server/src/` | Rust server: `lib.rs` (routes: `/api/…`, `/files/…`, the page), `runs.rs` (runs on disk), `events.rs` (engine `--json` lines), `runner.rs` (runs the engine), `job.rs` (the current run), `start.rs` (POST /api/runs: validation, engine args), `channels.rs` (channels on disk), `main.rs` (env settings); `testdata/fake-localdub.sh` |
 | `deploy/server/` | the web app on a Linux box: `build.sh` (dev container or CI → `dist/localdub-app.tar.gz`: static musl server + page + `BUILD`), `install.sh` (→ `/opt/localdub`, systemd `localdub-server`, 127.0.0.1:8080; refuses while a run is going unless `--force`; laptop uses `ssh -N -L 8080:127.0.0.1:8080`) |
 | `deploy/update.sh` | on CT 103: engine (git pull + venv install) and the latest web app from the GitHub release `app` (CI `release.yml` rebuilds it on every merge to main touching server/web/deploy-server) |
 | `web/` | React + TypeScript page (Vite): `src/api.ts` (API types/client), `src/App.tsx` (job panel, new-run form, runs list), `src/format.ts` (+ tests) |
@@ -121,6 +121,9 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
    (whole run with reviews in the page: Ivan "looking great"). Since then: release builds +
    `deploy/update.sh`; AI panel (engine 0.8.0 `call` events → job.calls; engine stderr → job.log;
    `/api/status` from llama-swap `/running` + `/metrics`, live every 2 s while watched).
+   Language-agnostic (Nov 20, engine 0.9.0, plan part A, PRs #18–#22): language table, channels
+   choose `--from/--to` (+ speaker), neutral keys and review labels, take check/prompts/voice
+   scoring per language, dictionaries per channel, channels + languages in the server and page.
    **Next, in this order**: voice picker (`localdub voice <run>`: candidates + test clones + scores,
    pick one for the channel; page: listen and compare), YouTube downloads with yt-dlp (install
    the self-updating binary on CT 103; server runs it into `<home>/videos`), UI overhaul (mock-up

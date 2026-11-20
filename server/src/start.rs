@@ -20,6 +20,12 @@ pub struct StartRequest {
     /// When the dub is done, also make the top N Shorts in both languages (0 = none).
     #[serde(default)]
     pub shorts: u32,
+    /// A new channel's languages: the video's and the dub's, as codes ("bg", "en"). Required for a
+    /// channel that doesn't exist yet; for an existing one the engine checks they match.
+    pub source: Option<String>,
+    pub target: Option<String>,
+    /// Optional for a new channel: "man" or "woman", for the translation's grammar.
+    pub speaker: Option<String>,
 }
 
 impl StartRequest {
@@ -44,8 +50,37 @@ impl StartRequest {
                 home.display()
             ));
         }
+        for (what, code) in [("video", &self.source), ("dub", &self.target)] {
+            if let Some(code) = code
+                && !is_language_code(code)
+            {
+                return Err(format!(
+                    "{what} language {code:?}: a language code like \"bg\" or \"en\""
+                ));
+            }
+        }
+        if let Some(speaker) = &self.speaker
+            && !matches!(speaker.as_str(), "man" | "woman")
+        {
+            return Err(format!("speaker {speaker:?}: \"man\" or \"woman\""));
+        }
+        let profile = home
+            .join("channels")
+            .join(&self.channel)
+            .join("profile.json");
+        if !profile.is_file() && (self.source.is_none() || self.target.is_none()) {
+            return Err(format!(
+                "channel {:?} is new: choose the video's language and the dub's",
+                self.channel
+            ));
+        }
         Ok(())
     }
+}
+
+/// An ISO 639 code as the engine's table has them: two or three lowercase letters.
+fn is_language_code(s: &str) -> bool {
+    (2..=3).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_lowercase())
 }
 
 /// The body of POST /api/runs/{name}/shorts.
@@ -123,6 +158,16 @@ pub fn engine_args(req: &StartRequest) -> Vec<String> {
         args.push("--shorts".to_string());
         args.push(req.shorts.to_string());
     }
+    for (flag, value) in [
+        ("--from", &req.source),
+        ("--to", &req.target),
+        ("--speaker", &req.speaker),
+    ] {
+        if let Some(value) = value {
+            args.push(flag.to_string());
+            args.push(value.clone());
+        }
+    }
     args
 }
 
@@ -152,6 +197,9 @@ mod tests {
             name: "market".into(),
             no_review,
             shorts,
+            source: None,
+            target: None,
+            speaker: None,
         }
     }
 
@@ -226,6 +274,9 @@ mod tests {
             name: name.into(),
             no_review: false,
             shorts: 0,
+            source: Some("bg".into()),
+            target: Some("en".into()),
+            speaker: None,
         }
     }
 
@@ -309,6 +360,69 @@ mod tests {
         assert!(!is_safe_file_name("../x.mp4"));
         assert!(!is_safe_file_name(".hidden.mp4"));
         assert!(!is_safe_file_name(&format!("{}.mp4", "a".repeat(130))));
+    }
+
+    #[test]
+    fn a_new_channels_languages_and_speaker_become_engine_flags() {
+        let mut req = request(true, 0);
+        req.source = Some("de".into());
+        req.target = Some("es".into());
+        req.speaker = Some("woman".into());
+
+        assert_eq!(
+            engine_args(&req)[6..],
+            [
+                "--no-review",
+                "--from",
+                "de",
+                "--to",
+                "es",
+                "--speaker",
+                "woman"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_new_channel_needs_its_languages_and_an_existing_one_does_not() {
+        let (home, video) = home_with_video();
+        let mut req = with("market", "newchannel", &video);
+        req.target = None;
+
+        let refused = req.validate(home.path());
+        let channel = home.path().join("channels").join("newchannel");
+        std::fs::create_dir_all(&channel).unwrap();
+        std::fs::write(channel.join("profile.json"), "{}").unwrap();
+
+        assert!(
+            refused
+                .unwrap_err()
+                .contains("is new: choose the video's language")
+        );
+        assert_eq!(req.validate(home.path()), Ok(()));
+    }
+
+    #[test]
+    fn languages_and_speakers_must_have_the_right_shape() {
+        let (home, video) = home_with_video();
+
+        for (source, target, speaker) in [
+            ("--help", "en", None),
+            ("bg", "EN", None),
+            ("bg", "english", None),
+            ("bg", "", None),
+            ("bg", "en", Some("other")),
+            ("bg", "en", Some("")),
+        ] {
+            let mut req = with("market", "newchannel", &video);
+            req.source = Some(source.into());
+            req.target = Some(target.into());
+            req.speaker = speaker.map(Into::into);
+            assert!(
+                req.validate(home.path()).is_err(),
+                "{source} {target} {speaker:?}"
+            );
+        }
     }
 
     #[test]

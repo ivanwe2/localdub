@@ -359,3 +359,19 @@ video {
   border-radius: 8px;
   background: #000;
 }
+
+fieldset {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 12px 4px;
+  margin: 0 0 12px;
+}
+
+legend {
+  color: var(--muted);
+  padding: 0 4px;
+}
+
+label .muted {
+  font-size: 0.85rem;
+}

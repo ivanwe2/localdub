@@ -10,6 +10,13 @@ case " $* " in
 esac
 echo "fake-localdub: messages for people go to stderr" >&2
 
+# `languages`: the engine's language table (two of them here)
+if [ "$1" = "languages" ]; then
+  echo '{"event": "languages", "languages": [{"code": "en", "name": "English", "dub": true, "dictionary": "en_US", "dictionary_installed": true, "apt": "hunspell-en-us"}, {"code": "bg", "name": "Bulgarian", "dub": false, "dictionary": "bg_BG", "dictionary_installed": true, "apt": "hunspell-bg"}]}'
+  echo '{"event": "result", "status": "done", "exit_code": 0}'
+  exit 0
+fi
+
 # `shorts <run> --lang <lang>`: proposes candidates and stops for you to pick them
 if [ "$1" = "shorts" ]; then
   echo "{\"event\": \"start\", \"command\": \"shorts\", \"run\": \"$2\", \"channel\": \"c\", \"dir\": \"/tmp/runs/$2\", \"lang\": \"$4\"}"

@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { fileUrl, type Job } from "./api";
+import { type Channel, fileUrl, type Job, type Language } from "./api";
 import {
   approve,
+  defaultTarget,
+  dictionaryNote,
+  findChannel,
+  languageFields,
   candidates,
   formatBytes,
   formatSeconds,
@@ -154,5 +158,38 @@ describe("fileUrl", () => {
     expect(fileUrl("пазар", "пазар.en.mp4")).toBe(
       `/files/${encodeURIComponent("пазар")}/${encodeURIComponent("пазар.en.mp4")}`,
     );
+  });
+});
+
+describe("a new channel's languages", () => {
+  const channels: Channel[] = [
+    { name: "friend", source: "bg", target: "en", source_name: "Bulgarian", target_name: "English", speaker: null, has_voice: true },
+  ];
+  const language = (code: string, dub: boolean, installed = true): Language => ({
+    code,
+    name: code.toUpperCase(),
+    dub,
+    dictionary: `${code}_XX`,
+    dictionary_installed: installed,
+    apt: `hunspell-${code}`,
+  });
+
+  it("are sent only for a channel that doesn't exist yet", () => {
+    expect(languageFields(" friend ", channels, "de", "es", "woman")).toEqual({});
+    expect(languageFields("market", channels, "de", "es", "")).toEqual({ source: "de", target: "es" });
+    expect(languageFields("market", channels, "de", "es", "woman")).toEqual({ source: "de", target: "es", speaker: "woman" });
+    expect(findChannel("friend", channels)?.target_name).toBe("English");
+  });
+
+  it("start with English as the dub language if the voice model speaks it", () => {
+    expect(defaultTarget([language("bg", false), language("de", true), language("en", true)])).toBe("en");
+    expect(defaultTarget([language("bg", false), language("de", true)])).toBe("de");
+    expect(defaultTarget([])).toBe("");
+  });
+
+  it("say when a dictionary is missing and how to install it", () => {
+    expect(dictionaryNote(language("de", true))).toBe("");
+    expect(dictionaryNote(language("de", true, false))).toBe(" (dictionary missing: apt-get install hunspell-de)");
+    expect(dictionaryNote({ ...language("xx", false, false), dictionary: null })).toBe(" (no spelling check)");
   });
 });

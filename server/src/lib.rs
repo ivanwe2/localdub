@@ -3,6 +3,7 @@
 //! `pub` here is the library's API, so a finished piece doesn't count as "never used" before a
 //! route uses it.
 
+pub mod channels;
 pub mod events;
 pub mod job;
 pub mod runner;
@@ -28,6 +29,8 @@ use tokio_stream::wrappers::WatchStream;
 use tokio_stream::{Stream, StreamExt};
 use tower_http::services::{ServeDir, ServeFile};
 
+use crate::channels::Channel;
+use crate::events::{Event, Language};
 use crate::job::{Job, JobState};
 use crate::runs::{RunSummary, Waiting};
 use crate::start::{ShortsRequest, StartRequest};
@@ -377,6 +380,47 @@ async fn upload_video(
     Ok((StatusCode::CREATED, Json(video)))
 }
 
+/// GET /api/channels: every channel, with the languages it dubs from and into.
+async fn get_channels(State(state): State<AppState>) -> Result<Json<Vec<Channel>>, Failure> {
+    let list = channels::list_channels(&state.home)
+        .await
+        .map_err(server_error)?;
+    Ok(Json(list))
+}
+
+/// GET /api/languages: the languages the engine knows, which ones a channel can be dubbed into
+/// and which spelling dictionaries are installed (`localdub languages --json`, a second or less;
+/// it isn't a GPU job, so it runs beside one).
+async fn get_languages(State(state): State<AppState>) -> Result<Json<Vec<Language>>, Failure> {
+    let Some((program, before)) = state.engine.split_first() else {
+        return Err(server_error(
+            "no engine command configured (LOCALDUB_ENGINE)",
+        ));
+    };
+    let mut args = before.to_vec();
+    args.push("languages".to_string());
+    let (mut found, mut log) = (None, Vec::new());
+    let code = runner::run_engine(
+        program,
+        &args,
+        |event| {
+            if let Event::Languages { languages } = event {
+                found = Some(languages);
+            }
+        },
+        |line| log.push(line),
+    )
+    .await
+    .map_err(|e| server_error(format!("could not start the engine ({program}): {e}")))?;
+    let languages = found.ok_or_else(|| {
+        server_error(format!(
+            "the engine listed no languages (exit code {code}): {}",
+            log.join("\n")
+        ))
+    })?;
+    Ok(Json(languages))
+}
+
 /// GET /api/status: the models and GPUs right now (asked on the spot).
 async fn get_status(State(state): State<AppState>) -> Json<Status> {
     match &state.models {
@@ -422,8 +466,8 @@ async fn job_events(
 }
 
 /// The whole server:
-/// - `/api/...` the JSON API: health, runs (start, continue, review, Shorts), uploads, the job,
-///   the models' and GPUs' status
+/// - `/api/...` the JSON API: health, runs (start, continue, review, Shorts), channels, languages,
+///   uploads, the job, the models' and GPUs' status
 /// - `/files/<run>/<path>` a run's files, e.g. the dubbed video (ServeDir also answers range
 ///   requests, so the browser can seek in a video, and never serves anything outside runs/)
 /// - everything else: the web UI, with index.html for any path it doesn't have
@@ -434,6 +478,8 @@ pub fn app(state: AppState) -> Router {
         .route("/runs/{name}/continue", post(continue_run))
         .route("/runs/{name}/shorts", post(make_shorts))
         .route("/runs/{name}/review", get(get_review).put(put_review))
+        .route("/channels", get(get_channels))
+        .route("/languages", get(get_languages))
         .route("/videos", get(list_videos))
         .route(
             "/videos/{file}",
@@ -535,8 +581,16 @@ mod tests {
     /// A stand-in for localdub that prints a run's events without doing any work.
     const FAKE_ENGINE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/fake-localdub.sh");
 
-    /// The app's state for a test: runs in `home`, and the fake engine instead of localdub.
+    /// The app's state for a test: runs in `home`, which has the channel "c" (bg -> en), and the
+    /// fake engine instead of localdub.
     fn test_state(home: &Path) -> AppState {
+        let channel = home.join("channels").join("c");
+        std::fs::create_dir_all(&channel).unwrap();
+        std::fs::write(
+            channel.join("profile.json"),
+            r#"{"source_lang": "bg", "target_lang": "en"}"#,
+        )
+        .unwrap();
         AppState::new(home.to_path_buf(), vec!["sh".into(), FAKE_ENGINE.into()])
     }
 
@@ -1096,6 +1150,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn channels_and_languages_for_the_new_run_form() {
+        let home = tempfile::tempdir().unwrap();
+        let state = test_state(home.path());
+
+        let (status, channels) = get_json(app(state.clone()), "/api/channels").await;
+        let (lang_status, languages) = get_json(app(state), "/api/languages").await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(channels[0]["name"], "c");
+        assert_eq!(
+            (&channels[0]["source"], &channels[0]["target"]),
+            (&json!("bg"), &json!("en"))
+        );
+        assert_eq!(lang_status, StatusCode::OK);
+        assert_eq!(languages[0]["code"], "en");
+        assert_eq!(languages[1]["dub"], false);
+    }
+
+    #[tokio::test]
+    async fn languages_from_an_engine_that_cant_list_them_are_an_error() {
+        let home = tempfile::tempdir().unwrap();
+        let state = AppState::new(home.path().to_path_buf(), vec!["false".into()]);
+
+        let request = Request::get("/api/languages").body(Body::empty()).unwrap();
+        let (status, text) = get_text_from(app(state), request).await;
+
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(text.contains("listed no languages"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_new_channel_is_started_with_its_languages_only() {
+        let home = tempfile::tempdir().unwrap();
+        let state = test_state(home.path());
+        let mut body = start_body(&state, "done-run");
+        body["channel"] = json!("brandnew");
+
+        let (refused, _) = post_json(app(state.clone()), "/api/runs", body.clone()).await;
+        body["source"] = json!("de");
+        body["target"] = json!("en");
+        let (accepted, _) = post_json(app(state.clone()), "/api/runs", body).await;
+
+        assert_eq!(refused, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(accepted, StatusCode::ACCEPTED);
+        assert_eq!(job_when_settled(&state).await["state"], "done");
+    }
+
+    #[tokio::test]
     async fn a_start_request_without_a_name_is_refused() {
         let home = tempfile::tempdir().unwrap();
         let body = json!({"video": "done-run", "channel": "c"});
@@ -1130,7 +1232,10 @@ mod tests {
     #[tokio::test]
     async fn an_engine_that_cannot_be_started_fails_the_job() {
         let home = tempfile::tempdir().unwrap();
-        let state = AppState::new(home.path().to_path_buf(), vec!["/no/such/localdub".into()]);
+        let state = AppState {
+            engine: Arc::new(vec!["/no/such/localdub".into()]),
+            ..test_state(home.path()) // the rest as usual (C#: a `with` expression)
+        };
 
         post_json(
             app(state.clone()),

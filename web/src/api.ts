@@ -110,6 +110,42 @@ export interface StartRequest {
   name: string;
   no_review: boolean;
   shorts: number;
+  /** A new channel's languages (codes like "bg", "en") and, optionally, its speaker. */
+  source?: string;
+  target?: string;
+  speaker?: Speaker;
+}
+
+/** Only the translation's grammar uses it (first-person forms in gendered languages). */
+export type Speaker = "man" | "woman";
+
+/** A channel and the languages it dubs from and into (server/src/channels.rs). */
+export interface Channel {
+  name: string;
+  source: string;
+  target: string;
+  source_name: string;
+  target_name: string;
+  speaker: Speaker | null;
+  has_voice: boolean;
+}
+
+/** A language the engine knows (`localdub languages`). */
+export interface Language {
+  code: string;
+  name: string;
+  dub: boolean; // can a channel be dubbed into it?
+  dictionary: string | null;
+  dictionary_installed: boolean;
+  apt: string | null; // the Debian package with the dictionary
+}
+
+export async function listChannels(): Promise<Channel[]> {
+  return (await check(await fetch("/api/channels"))).json();
+}
+
+export async function listLanguages(): Promise<Language[]> {
+  return (await check(await fetch("/api/languages"))).json();
 }
 
 /** The server's answer when it isn't 2xx: the status and its plain-text reason. */
