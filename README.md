@@ -173,6 +173,8 @@ server/target/release/localdub-server               # http://127.0.0.1:8080
 | `LOCALDUB_LISTEN` | `127.0.0.1:8080` | there is no login yet: open it to the network (`0.0.0.0:8080`) only on a trusted LAN |
 | `LOCALDUB_ALLOWED_HOSTS` | | other names the browser uses to reach it, e.g. `192.168.0.71:8080` |
 | `LOCALDUB_WEB` | `web/dist` | the built page |
+| `LOCALDUB_MODELS_URL` | `http://127.0.0.1:9876` | llama-swap, for the models' and GPUs' status (`none`: no status); its key from `LLAMA_API_KEY` |
+| `LOCALDUB_YTDLP` | `yt-dlp` | yt-dlp's command, for downloads from links (`none`: no downloads) |
 
 To put it on a Linux machine (no Rust or Node needed there): CI builds the package (one static
 server binary plus the page) on every merge to `main` and publishes it on the GitHub release
@@ -184,13 +186,21 @@ bash ~/localdub/deploy/update.sh                     # on the machine, as root
 ssh -N -L 8080:127.0.0.1:8080 root@gpu-box           # laptop, then open http://localhost:8080
 ```
 
-It listens on that machine only, hence the SSH tunnel. It won't restart the service while a run is
-going (`--force` does). To build the package yourself: `bash deploy/server/build.sh` in the dev
-container makes `dist/localdub-app.tar.gz`; unpack it on the machine and run its `install.sh`.
+It listens on that machine only, hence the SSH tunnel. It won't restart the service while a run or a
+download is going (`--force` does). To build the package yourself: `bash deploy/server/build.sh` in
+the dev container makes `dist/localdub-app.tar.gz`; unpack it on the machine and run its `install.sh`.
 
-In the page you upload a video (or give a path inside the home folder), start a run, follow it live,
-do the reviews (edit the text, *Approve and continue*), make and pick Shorts (tick them, *Render*),
-and watch or download the results.
+For downloads from links, `update.sh` (and the package's `install.sh`) installs
+[yt-dlp](https://github.com/yt-dlp/yt-dlp) and [Deno](https://deno.com) (the JavaScript runtime yt-dlp
+needs for YouTube) into `/usr/local/bin`, checked against their published checksums, and updates
+yt-dlp on every run: sites change and an old yt-dlp stops working. Extra yt-dlp options (cookies, a
+proxy) can go into `/etc/yt-dlp.conf`. Download only videos you have the rights to dub.
+
+In the page you upload a video, download one from a link (YouTube and the other sites yt-dlp
+knows; it lands in the videos folder as `yt-<id>-<title>.mp4`, up to 1080p, and runs beside a dub),
+or give a path inside the home folder; then start a run, follow it live, do the reviews (edit the
+text, *Approve and continue*), make and pick Shorts (tick them, *Render*), and watch or download the
+results.
 
 The API:
 
@@ -206,7 +216,9 @@ The API:
 | `POST` / `GET /api/runs/<run>/voice` | make voice samples from the run's speech (with test clones, and of the channel's voice now); read them |
 | `POST /api/runs/<run>/voice/pick` | make one the channel's voice: `{"pick": 2}` or `{"pick": "current"}` |
 | `POST /api/runs/<run>/revoice` | dub a finished run again with the channel's voice |
-| `GET /api/videos`, `PUT /api/videos/<file>` | the uploaded videos; upload one (the body is the file) |
+| `GET /api/videos`, `PUT /api/videos/<file>` | the uploaded and downloaded videos; upload one (the body is the file) |
+| `POST /api/downloads` | download a video from a link with yt-dlp: `{"url": "https://…"}` (one at a time, beside a run) |
+| `GET /api/download`, `GET /api/download/events` | the current download (title, which part, bytes, speed, time left; the video when done), and live |
 | `GET /api/job`, `GET /api/job/events` | the current run (with its latest model requests and log), and live as Server-Sent Events |
 | `GET /api/status`, `GET /api/status/events` | the models llama-swap has running and each GPU's load, memory, temperature and power, live every 2 s |
 | `GET /files/<run>/<path>` | a run's files |
@@ -220,7 +232,7 @@ takes changes only from its own page (not from other sites open in the same brow
 pip install -e ".[dev]"
 python -m pytest -q -m "not slow"     # unit tests, seconds
 python -m pytest -q                   # plus two whole runs against fake model servers, ~2 min
-cd server && cargo test               # the server, against a fake engine script
+cd server && cargo test               # the server, against fake engine and yt-dlp scripts
 cd web && npm test                    # the page's helpers
 cd web && npm run dev                 # the page with instant reload, using the server on :8080
 ```
