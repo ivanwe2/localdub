@@ -35,6 +35,11 @@ const job = (over: Partial<Job>): Job => ({
   error: null,
   calls: [],
   log: [],
+  started_ms: 0,
+  ended_ms: null,
+  stage_started_ms: null,
+  timings: {},
+  progress: null,
   ...over,
 });
 
