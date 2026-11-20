@@ -1,5 +1,5 @@
 """A generated test video: made-up Bulgarian sentences (with typical spelling-by-ear errors), word timings,
-and a matching video whose audio is a tone while 'he' speaks and silence in the pauses."""
+and a matching video whose audio is a tone while the speaker talks and silence in the pauses."""
 from __future__ import annotations
 
 import json

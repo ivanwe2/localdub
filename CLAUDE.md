@@ -30,7 +30,8 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 
 | Path | What |
 |---|---|
-| `src/localdub/run.py` | CLI, the stages, reviews and learning, `check`, `shorts` command |
+| `src/localdub/run.py` | CLI, the stages, reviews and learning, `check`, `shorts`, `channel`, `languages` commands |
+| `src/localdub/languages.py` | the language table (name, ISO 639-2, hunspell dict + apt package, num2words code, separators, abbreviations, calibration sentences, spelling hints); what can be dubbed into is the setting `tts_languages` |
 | `src/localdub/llm.py` | llama-swap client: chat (JSON repair, retries), TTS, transcription, separation, unload |
 | `src/localdub/text.py` | sentences, spelling guard, translation, shortening |
 | `src/localdub/voice.py` | voice-sample candidates, takes, the take check (`judge`), fitting |
@@ -57,8 +58,10 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 - Public repo: never commit media, transcripts or voice samples of real people. Tests use the
   generated fixture in `tests/fixture.py` with made-up sentences.
 - Settings: defaults in `settings.py`; `~/dub/settings.json` overrides only what differs.
-- Language-agnostic: nothing may assume Bulgarian → English. Languages, dictionaries and prompts come
-  from the channel profile and settings.
+- Language-agnostic: nothing may assume Bulgarian → English or the speaker's gender ("the speaker").
+  Languages come from `languages.py` and the channel profile (set on the channel's first run with
+  `--from/--to`, optional `--speaker man|woman` used only in the translation prompt); profiles from
+  before 0.9.0 without `source_lang` are read as bg → en.
 
 ## Workflow
 

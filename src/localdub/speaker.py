@@ -1,15 +1,15 @@
-"""Speaker fingerprints: how much a voice sounds like him.
+"""Speaker fingerprints: how much a voice sounds like the speaker.
 
 A speaker-verification model turns a few seconds of speech into a vector (an "embedding"); recordings
 of the same person point in nearly the same direction, so the cosine similarity of two vectors says
 how alike two voices are (1.0 = identical). It is trained to ignore what is being said and in which
-language, which is what makes it useful here: his Bulgarian speech in the video and the English
-clone can be compared directly.
+language, which is what makes it useful here: the speaker's speech in the video and the
+dubbed clone, in another language, can be compared directly.
 
-localdub builds his voiceprint from his own speech in the video (sentences cut from the separated
+localdub builds the speaker's voiceprint from their own speech in the video (sentences cut from the separated
 vocals, averaged), then uses it to
   - choose the voice sample: clone a few test sentences from each candidate sample, keep the sample
-    whose clones sound most like him;
+    whose clones sound most like the speaker;
   - choose between takes of a line: among takes that pass the check and fit, keep the most similar.
 
 The model is WavLM x-vectors (microsoft/wavlm-base-plus-sv) through `transformers`, installed with
@@ -107,7 +107,7 @@ def embed_files(embedder, paths: list[Path]) -> list[np.ndarray]:
 
 
 def voiceprint(embedder, segs: list[dict], vocals: Path, max_clips: int = 24) -> np.ndarray | None:
-    """His average fingerprint from up to `max_clips` sentences of 2-8 s spread over the video."""
+    """The speaker's average fingerprint from up to `max_clips` sentences of 2-8 s spread over the video."""
     from .voice import read_audio
     audio = read_audio(vocals, RATE)
     good = [s for s in segs if 2.0 <= s["end"] - s["start"] <= 8.0 and not s.get("flags")]

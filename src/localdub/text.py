@@ -236,8 +236,8 @@ def spellcheck(segs, server, settings, profile) -> dict:
 
 TRANSLATE_PROMPT = (
     "You translate a {src} YouTube video into {tgt} for a voice dub. The {tgt} will be spoken in the "
-    "creator's own cloned voice, so write natural spoken {tgt} that sounds like him. Channel style: {style}. "
-    "Do not translate word for word, and do not add or drop meaning.\n"
+    "creator's own cloned voice, so write natural spoken {tgt} that sounds like the speaker. Channel style: {style}. "
+    "{speaker}Do not translate word for word, and do not add or drop meaning.\n"
     "Each line is a sentence with a time slot and a character budget, roughly what fits when spoken. Stay "
     "within the budget: prefer shorter phrasing over long literal renderings. Write numbers out as words "
     "(\"two hundred thousand\", not \"200,000\"), so the length is honest. Translate each line on its own; do "
@@ -248,6 +248,14 @@ TRANSLATE_PROMPT = (
     'Reply with JSON only: {{"lines": [{{"id": <line id>, "text": "<translation>"}}]}}, one entry for every '
     "line to translate, in order."
 )
+
+def speaker_note(speaker: str) -> str:
+    """For gendered languages: who speaks, so first-person forms ("I was tired") come out right."""
+    if speaker not in ("man", "woman"):
+        return ""
+    return (f"The speaker is a {speaker}: use the matching grammatical gender wherever the speaker refers to "
+            "themself. ")
+
 
 SHORTEN_PROMPT = (
     "Shorten each {tgt} dub line to fit its character budget when spoken, keeping its meaning, tone and any "
@@ -303,7 +311,8 @@ def translate(segs, server, settings, profile, progress=None) -> None:
     """Fill s["en"] for every line. Lines that already have one (from an interrupted run) are kept;
     `progress()` is called after each request so the caller can save what's done."""
     src, tgt = profile["source_language_name"], profile["target_language_name"]
-    system = TRANSLATE_PROMPT.format(src=src, tgt=tgt, style=profile["style"])
+    system = TRANSLATE_PROMPT.format(src=src, tgt=tgt, style=profile["style"],
+                                     speaker=speaker_note(profile.data.get("speaker", "")))
     memory = profile.memory()
     names = {k: v for k, v in profile["names"].items() if v}
     for start in range(0, len(segs), 20):

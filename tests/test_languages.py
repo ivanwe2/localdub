@@ -1,0 +1,132 @@
+"""Languages: the table, a channel's languages and speaker, and the `languages` / `channel` commands."""
+import json
+from argparse import Namespace
+
+import pytest
+
+from localdub import languages
+from localdub.settings import DEFAULT_SETTINGS, Profile
+from localdub.text import speaker_note
+
+
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALDUB_HOME", str(tmp_path))
+    return tmp_path
+
+
+def flags(source=None, target=None, speaker=None):
+    return Namespace(source=source, target=target, speaker=speaker)
+
+
+def events_of(capsys):
+    return [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+
+
+def test_the_table_knows_its_languages_and_says_which_it_doesnt():
+    assert languages.get("de").name == "German" and languages.get("de").hunspell == "de_DE"
+    with pytest.raises(ValueError, match="unknown language 'xx'.*de \\(German\\)"):
+        languages.get("xx")
+
+
+def test_every_dub_language_has_what_dubbing_needs():
+    for code in languages.dub_languages(DEFAULT_SETTINGS):
+        lang = languages.get(code)
+        assert len(lang.calibration) == 4, code  # test sentences for scoring voice samples
+        assert lang.numbers and lang.percent and lang.iso3 and lang.hunspell and lang.apt, code
+
+
+def test_what_can_be_dubbed_into_is_a_setting():
+    assert languages.dub_languages({"tts_languages": ["ru", "en", "zz"]}) == ["en", "ru"]  # table order
+
+
+def test_a_new_channel_gets_its_languages_from_the_flags(home):
+    from localdub.run import channel_profile
+
+    profile = channel_profile("market", flags("de", "es", "woman"), DEFAULT_SETTINGS)
+
+    saved = json.loads((home / "channels" / "market" / "profile.json").read_text(encoding="utf-8"))
+    assert (saved["source_lang"], saved["target_lang"]) == ("de", "es")
+    assert (saved["source_language_name"], saved["target_language_name"]) == ("German", "Spanish")
+    assert saved["hunspell_dict"] == "de_DE" and saved["speaker"] == "woman"
+    assert profile["target_lang"] == "es"
+
+
+@pytest.mark.parametrize("given, why", [
+    (flags(), "is new: give the video's language"),
+    (flags("de", "de"), "from one language into another"),
+    (flags("de", "bg"), "the voice model can't speak Bulgarian"),
+    (flags("xx", "en"), "unknown language 'xx'"),
+])
+def test_a_new_channel_without_usable_languages_is_refused(home, given, why):
+    from localdub.run import channel_profile
+
+    result = channel_profile("market", given, DEFAULT_SETTINGS)
+
+    assert isinstance(result, str) and why in result
+    assert not (home / "channels" / "market" / "profile.json").exists(), "nothing saved"
+
+
+def test_an_existing_channel_keeps_its_languages(home):
+    from localdub.run import channel_profile
+    channel_profile("market", flags("de", "es"), DEFAULT_SETTINGS)
+
+    again = channel_profile("market", flags(), DEFAULT_SETTINGS)
+    other = channel_profile("market", flags("de", "fr"), DEFAULT_SETTINGS)
+
+    assert again["target_lang"] == "es"
+    assert isinstance(other, str) and "dubs de → es; for de → fr use another channel name" in other
+
+
+def test_a_profile_from_before_languages_is_bulgarian_to_english(home):
+    channel = home / "channels" / "old"
+    channel.mkdir(parents=True)
+    (channel / "profile.json").write_text(json.dumps({"names": {"Митев": "Mitev"}, "voice_ref": "voice.wav"}))
+
+    profile = Profile("old")
+
+    assert (profile["source_lang"], profile["target_lang"], profile["hunspell_dict"]) == ("bg", "en", "bg_BG")
+    assert profile["names"] == {"Митев": "Mitev"} and profile["speaker"] == ""
+
+
+def test_the_speaker_only_goes_into_the_translation_prompt():
+    assert speaker_note("woman").startswith("The speaker is a woman: use the matching grammatical gender")
+    assert speaker_note("") == "" and speaker_note("other") == ""
+
+
+def test_the_languages_command_lists_the_table(home, capsys):
+    from localdub.run import main
+
+    assert main(["languages", "--json"]) == 0
+
+    listed = {row["code"]: row for row in events_of(capsys)[0]["languages"]}
+    assert listed["de"]["dub"] is True and listed["bg"]["dub"] is False
+    assert listed["bg"]["dictionary"] == "bg_BG" and listed["de"]["apt"] == "hunspell-de-de"
+    assert set(listed) == set(languages.LANGUAGES)
+
+
+def test_the_languages_command_tells_install_scripts_which_dictionaries_to_install(home, capsys):
+    from localdub.run import channel_profile, main
+    channel_profile("market", flags("ru", "en"), DEFAULT_SETTINGS)
+
+    assert main(["languages", "--apt", "de", "bg"]) == 0
+
+    assert capsys.readouterr().out.split() == ["hunspell-bg", "hunspell-de-de", "hunspell-ru"]
+
+
+def test_the_channel_command_shows_and_changes_the_speaker(home, capsys):
+    from localdub.run import channel_profile, main
+    channel_profile("market", flags("de", "es"), DEFAULT_SETTINGS)
+
+    assert main(["channel", "market", "--speaker", "man", "--json"]) == 0
+    shown = events_of(capsys)[0]
+    assert main(["channel", "nobody", "--json"]) == 1
+
+    assert shown["event"] == "channel" and shown["speaker"] == "man" and shown["target"] == "es"
+    assert Profile("market")["speaker"] == "man"
+
+
+def test_a_media_language_tag_is_iso_639_2():
+    from localdub.run import iso3
+
+    assert (iso3("de"), iso3("bg"), iso3("zz")) == ("deu", "bul", "und")

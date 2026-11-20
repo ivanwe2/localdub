@@ -1,7 +1,10 @@
 """The pipeline: one command, resumable, and it stops twice for your review.
 
-    localdub run VIDEO --channel NAME [--start 1:00 --duration 2:30]
+    localdub run VIDEO --channel NAME --from bg --to en [--start 1:00 --duration 2:30]
+                                   a new channel needs its languages; later runs just --channel NAME
     localdub run NAME              continue a run (after a review, or after an error)
+    localdub channel NAME          a channel's settings (--speaker man|woman|none to change it)
+    localdub languages             the languages localdub knows
     localdub check                 is everything it needs in place?
 
 Everything a run makes is kept in ~/dub/runs/<name>/, so rerunning continues where it stopped.
@@ -22,7 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import events, media, review
+from . import events, languages, media, review
 from .llm import LLMError, Server
 from .mix import mix, mux, place, subtitles
 from .settings import Profile, home, load_settings
@@ -31,7 +34,11 @@ from .text import (Speller, _is_name, build_segments, core, replace_words, short
 from .voice import RATE, cut_voice, voice_all, voice_candidates
 
 WAIT = "wait"
-LANG3 = {"bg": "bul", "en": "eng", "de": "deu", "es": "spa", "fr": "fra", "it": "ita", "ru": "rus", "pt": "por"}
+
+
+def iso3(code: str) -> str:
+    """The ISO 639-2 code for a media file's language tag; "und" (undetermined) if unknown."""
+    return languages.LANGUAGES[code].iso3 if code in languages.LANGUAGES else "und"
 
 
 def log(msg: str = "") -> None:
@@ -151,7 +158,7 @@ def stage_transcribe(run: Run, ctx: Ctx):
     total = run.state["seconds"]
     limit = nemo["max_chunk_minutes"] * 60
     cuts = [0.0]
-    if total > limit:  # one request is capped (29 min on a 16 GB card): split at pauses in his speech
+    if total > limit:  # one request is capped (29 min on a 16 GB card): split at pauses in the speech
         pauses = [(a + b) / 2 for a, b in media.silences(run.p("vocals.wav"), -35.0, 0.3)]
         while total - cuts[-1] > limit:
             lo, hi = cuts[-1] + limit * 0.6, cuts[-1] + limit
@@ -278,7 +285,7 @@ def learn_transcript(parsed: dict, segs: list[dict], report: dict, profile: Prof
 
 
 def run_voiceprint(run: Run, embedder, segs: list[dict]):
-    """His fingerprint from this video's separated vocals (cached in the run)."""
+    """The speaker's fingerprint from this video's separated vocals (cached in the run)."""
     from .speaker import voiceprint
     path = run.p("voiceprint.npy")
     if path.exists():
@@ -291,7 +298,7 @@ def run_voiceprint(run: Run, embedder, segs: list[dict]):
 
 def score_candidates(run: Run, ctx: Ctx, segs: list[dict], cands: list[dict]) -> None:
     """Clone a few test sentences from each candidate sample; rank the samples by how much the clones
-    sound like his real voice. Leaves the order alone if the speaker model isn't available."""
+    sound like the speaker's real voice. Leaves the order alone if the speaker model isn't available."""
     import base64
     from .speaker import CALIBRATION, embed_files, get_embedder, similarity
     lines = CALIBRATION.get(ctx.profile["target_lang"])
@@ -313,7 +320,7 @@ def score_candidates(run: Run, ctx: Ctx, segs: list[dict], cands: list[dict]) ->
                 raw.unlink()
             files.append(trim)
         c["sim"] = round(float(np.mean([similarity(e, vp) for e in embed_files(embedder, files)])), 3)
-        log(f"   candidate {k} ({media.mmss(c['start'])}-{media.mmss(c['end'])}): sounds like him {c['sim']:.2f}")
+        log(f"   candidate {k} ({media.mmss(c['start'])}-{media.mmss(c['end'])}): sounds like the speaker {c['sim']:.2f}")
     cands.sort(key=lambda c: -c["sim"])
 
 
@@ -329,7 +336,7 @@ def set_voice(run: Run, profile: Profile, choice: str) -> str:
             raise RuntimeError("review 1 needs a voice sample: write a candidate's number, a stretch like "
                                "'voice: 01:20-01:38' or a WAV file's path on the voice line")
         shutil.copyfile(cand, dst)
-        sim = f", sounds like him {cands[k - 1]['sim']:.2f}" if cands and cands[k - 1].get("sim") is not None else ""
+        sim = f", sounds like the speaker {cands[k - 1]['sim']:.2f}" if cands and cands[k - 1].get("sim") is not None else ""
         source = f"{run.name}, candidate {k} ({media.mmss(cands[k - 1]['start'])}-{media.mmss(cands[k - 1]['end'])}{sim})" \
             if 0 < k <= len(cands) else f"{run.name}, picked automatically"
     elif choice.lower().endswith(".wav"):
@@ -472,7 +479,7 @@ def stage_voice(run: Run, ctx: Ctx):
         embedder = get_embedder(ctx.settings)
         vp = run_voiceprint(run, embedder, segs) if embedder is not None else None
         if vp is not None:
-            log(f"   comparing up to {ctx.settings['takes_per_line']} good takes per line by how much they sound like him")
+            log(f"   comparing up to {ctx.settings['takes_per_line']} good takes per line by how much they sound like the speaker")
     report = voice_all(segs, run.dir, ctx.server, ctx.settings, ctx.profile, lang, embedder, vp)
     over = [s for s in segs if s.get("take") and s["take"]["ok"] and "OVER" in s["take"]["fit"]]
     if over and ctx.settings["auto_shorten"]:
@@ -501,13 +508,13 @@ def stage_voice(run: Run, ctx: Ctx):
     later = sum(1 for r in takes if r["ok"] and r["seed"] != first_seed)
     failed = sum(1 for r in takes if not r["ok"])
     over = sum(1 for r in takes if "OVER" in r["fit"])
-    log(f"   {first} lines kept the first take, {later} a later one (it passed, fitted or sounded more like him), "
+    log(f"   {first} lines kept the first take, {later} a later one (it passed, fitted or sounded more like the speaker), "
         f"{failed} never passed the check; "
         f"{over} still over their slot")
     sims = sorted(r["sim"] for r in takes if r.get("sim") is not None)
     if sims:
         run.state["voice_similarity"] = {"median": sims[len(sims) // 2], "lowest_10pct": sims[len(sims) // 10]}
-        log(f"   sounds like him: median {sims[len(sims) // 2]:.2f}, lowest 10% below {sims[len(sims) // 10]:.2f}")
+        log(f"   sounds like the speaker: median {sims[len(sims) // 2]:.2f}, lowest 10% below {sims[len(sims) // 10]:.2f}")
 
 
 def write_checklist(path: Path, segs: list[dict], video: Path) -> int:
@@ -546,24 +553,24 @@ def stage_mix(run: Run, ctx: Ctx):
     levels = mix(run.p("dub-voice.wav"), run.p("vocals.wav"), run.p("music.wav"), run.p("dub-mix.wav"),
                  ctx.settings["lufs"])
     out = run.p(f"{run.name}.{tgt_l}.mp4")
-    mux(Path(run.state["video"]), run.p("dub-mix.wav"), out, LANG3.get(tgt_l, tgt_l), LANG3.get(src_l, src_l))
+    mux(Path(run.state["video"]), run.p("dub-mix.wav"), out, iso3(tgt_l), iso3(src_l))
     subtitles(segs, run.p(f"{run.name}.{src_l}.srt"), run.p(f"{run.name}.{tgt_l}.srt"))
     n = write_checklist(run.p("check.txt"), segs, out)
     run.state["outputs"] = {"video": str(out), "subtitles": [str(run.p(f"{run.name}.{tgt_l}.srt")),
                                                             str(run.p(f"{run.name}.{src_l}.srt"))],
                             "check": str(run.p("check.txt")), "lines_to_check": n, "levels": levels}
-    log(f"   mix at {levels['final_lufs']} LUFS; dub levelled to his original voice ({levels['voice_lufs']} LUFS)")
+    log(f"   mix at {levels['final_lufs']} LUFS; dub levelled to the speaker's original voice ({levels['voice_lufs']} LUFS)")
 
 
 STAGES = [
     ("prep", "cut and extract the audio", stage_prep),
-    ("separate", "split his voice from the music and effects", stage_separate),
+    ("separate", "split the speaker's voice from the music and effects", stage_separate),
     ("transcribe", "transcribe with Nemotron", stage_transcribe),
     ("spelling", "sentences and spelling", stage_spelling),
     ("review1", "your check of the transcript and voice sample", stage_review1),
     ("translate", "translate", stage_translate),
     ("review2", "your check of the translation", stage_review2),
-    ("voice", "voice every line in his voice, checking each take", stage_voice),
+    ("voice", "voice every line in the speaker's voice, checking each take", stage_voice),
     ("mix", "mix over the music, write the video and subtitles", stage_mix),
 ]
 NAMES = [s[0] for s in STAGES]
@@ -584,6 +591,32 @@ def default_name(src: Path, start, length) -> str:
     return name
 
 
+def channel_profile(name: str, args, settings: dict) -> Profile | str:
+    """The channel's profile for this run, or why it can't be used. A new channel gets its languages
+    (and speaker) from --from/--to/--speaker; an existing one must not be given others."""
+    profile = Profile(name)
+    if profile.is_new:
+        if not (args.source and args.target):
+            return (f"channel '{name}' is new: give the video's language and the dub's with --from and --to, "
+                    f"e.g. --from bg --to en (localdub languages lists them)")
+        try:
+            profile.set_languages(args.source, args.target, settings)
+        except ValueError as e:
+            return str(e)
+        profile["speaker"] = args.speaker or ""
+        profile.save()
+        log(f"localdub: new channel '{name}': {profile['source_language_name']} → {profile['target_language_name']}")
+        return profile
+    given = (args.source or profile["source_lang"], args.target or profile["target_lang"])
+    if given != (profile["source_lang"], profile["target_lang"]):
+        return (f"channel '{name}' dubs {profile['source_lang']} → {profile['target_lang']}; "
+                f"for {given[0]} → {given[1]} use another channel name")
+    if args.speaker and args.speaker != profile["speaker"]:
+        profile["speaker"] = args.speaker
+        profile.save()
+    return profile
+
+
 def cmd_run(args) -> int:
     settings = load_settings()
     target = Path(args.video).expanduser()
@@ -598,6 +631,9 @@ def cmd_run(args) -> int:
         if not run.state:
             if not args.channel:
                 return fail("a new run needs --channel NAME (the channel whose profile it uses and teaches)")
+            checked = channel_profile(args.channel, args, settings)  # before the run exists: fail cleanly
+            if isinstance(checked, str):
+                return fail(checked)
             run.state = {"source": str(target.resolve()), "channel": args.channel, "start": start, "length": length,
                          "created": dt.datetime.now().isoformat(timespec="seconds"), "done": [], "timings": {}}
             run.save()
@@ -605,6 +641,9 @@ def cmd_run(args) -> int:
     events.note(run=run.name, channel=st["channel"], dir=str(run.dir))
     if args.channel and args.channel != st["channel"]:
         return fail(f"run '{run.name}' belongs to channel '{st['channel']}'; use --name for a separate run")
+    checked = channel_profile(st["channel"], args, settings)
+    if isinstance(checked, str):
+        return fail(checked)
     if args.redo:
         if args.redo not in NAMES:
             return fail(f"--redo takes one of: {', '.join(NAMES)}")
@@ -615,7 +654,7 @@ def cmd_run(args) -> int:
                 p = run.p(f)
                 shutil.rmtree(p) if p.is_dir() else p.unlink(missing_ok=True)
         run.save()
-    profile = Profile(st["channel"])
+    profile = checked
     ctx = Ctx(settings, profile, Server(settings), args.no_review, f"localdub run {run.name}")
     log(f"localdub: run '{run.name}' (channel '{st['channel']}') in {run.dir}")
     events.emit("start", command="run", run=run.name, channel=st["channel"], dir=str(run.dir),
@@ -822,6 +861,76 @@ def cmd_shorts(args) -> int:
     return rc
 
 
+def channel_names() -> list[str]:
+    """Every channel with a saved profile."""
+    root = home() / "channels"
+    return sorted(p.parent.name for p in root.glob("*/profile.json")) if root.exists() else []
+
+
+def dictionary_installed(name: str) -> bool:
+    """Can hunspell load this dictionary? (An empty name means the language has none.)"""
+    if not name:
+        return False
+    try:
+        Speller(name, []).unknown(["a"])
+        return True
+    except (RuntimeError, OSError):
+        return False
+
+
+def channel_info(profile: Profile) -> dict:
+    return {
+        "name": profile.name,
+        "source": profile["source_lang"],
+        "target": profile["target_lang"],
+        "source_name": profile["source_language_name"],
+        "target_name": profile["target_language_name"],
+        "speaker": profile["speaker"] or None,
+        "voice": profile.voice_path is not None and profile.voice_path.exists(),
+        "voice_from": profile.data.get("voice_from"),
+    }
+
+
+def cmd_channel(args) -> int:
+    profile = Profile(args.name)
+    if profile.is_new:
+        return fail(f"no channel called '{args.name}'; a channel is made by its first run "
+                    f"(localdub run VIDEO --channel {args.name} --from .. --to ..)")
+    if args.speaker is not None:
+        profile["speaker"] = "" if args.speaker == "none" else args.speaker
+        profile.save()
+    info = channel_info(profile)
+    voice = (info["voice_from"] or "set") if info["voice"] else "none yet"
+    log(f"channel '{info['name']}': {info['source_name']} → {info['target_name']}, "
+        f"speaker: {info['speaker'] or 'not set'}, voice sample: {voice}")
+    events.emit("channel", **info)
+    return 0
+
+
+def cmd_languages(args) -> int:
+    settings = load_settings()
+    if args.apt is not None:  # for scripts: the dictionary packages to install, on stdout
+        codes = set(args.apt) | {Profile(name)["source_lang"] for name in channel_names()}
+        packages = set()
+        for code in codes:
+            try:
+                packages.add(languages.get(code).apt)
+            except ValueError as e:
+                return fail(str(e))
+        print(" ".join(sorted(p for p in packages if p)))
+        return 0
+    dub = set(languages.dub_languages(settings))
+    rows = []
+    for lang in languages.LANGUAGES.values():
+        installed = dictionary_installed(lang.hunspell)
+        rows.append({"code": lang.code, "name": lang.name, "dub": lang.code in dub,
+                     "dictionary": lang.hunspell or None, "dictionary_installed": installed, "apt": lang.apt or None})
+        dict_note = "dictionary installed" if installed else f"no dictionary (apt-get install {lang.apt})"
+        log(f"  {lang.code}  {lang.name:<11} {'can be dubbed into' if lang.code in dub else 'video only':<19} {dict_note}")
+    events.emit("languages", languages=rows)
+    return 0
+
+
 def main(argv=None) -> int:
     from . import __version__
     ap = argparse.ArgumentParser(prog="localdub", description="Dub a video into another language in the creator's own voice.")
@@ -840,6 +949,11 @@ def main(argv=None) -> int:
     r.add_argument("--redo", metavar="STAGE", help=f"redo from this stage on: {', '.join(NAMES)}")
     r.add_argument("--shorts", type=int, default=0, metavar="N",
                    help="when the video is done, also make the top N Shorts in both languages, without stopping")
+    r.add_argument("--from", dest="source", metavar="LANG",
+                   help="a new channel's video language, e.g. bg (see: localdub languages)")
+    r.add_argument("--to", dest="target", metavar="LANG", help="a new channel's dub language, e.g. en")
+    r.add_argument("--speaker", choices=["man", "woman"],
+                   help="who speaks, so gendered languages translate 'I was tired' right (optional)")
     s = sub.add_parser("shorts", parents=[common], help="propose Shorts from a finished run, then render the ones you pick")
     s.add_argument("name", help="the run's name")
     s.add_argument("--lang", choices=["dub", "original"], default="dub",
@@ -847,10 +961,19 @@ def main(argv=None) -> int:
     s.add_argument("--auto", type=int, default=0, metavar="N", help="render the top N candidates without stopping")
     s.add_argument("--redo", choices=["vision", "select"], help="look at the video again / propose new candidates")
     sub.add_parser("check", parents=[common], help="check that the tools, models and server are in place")
+    c = sub.add_parser("channel", parents=[common], help="show a channel's settings, or change who speaks")
+    c.add_argument("name", help="the channel's name")
+    c.add_argument("--speaker", choices=["man", "woman", "none"], help="set who speaks ('none' = not set)")
+    lg = sub.add_parser("languages", parents=[common], help="the languages localdub knows and can dub into")
+    lg.add_argument("--apt", nargs="*", metavar="LANG",
+                    help="instead: print the Debian packages with the dictionaries for these languages and "
+                         "for every channel's video language (for install scripts)")
     args = ap.parse_args(argv)
     events.configure(args.json)
     try:
-        rc = {"run": cmd_run, "shorts": cmd_shorts, "check": cmd_check}[args.cmd](args)
+        commands = {"run": cmd_run, "shorts": cmd_shorts, "check": cmd_check, "channel": cmd_channel,
+                    "languages": cmd_languages}
+        rc = commands[args.cmd](args)
     except Exception as e:  # a bug, not a handled error: still end the event stream with a result
         events.note(error=f"{type(e).__name__}: {e}")
         events.finish(1)

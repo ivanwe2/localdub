@@ -248,7 +248,7 @@ class Server:
         return got
 
     def separate(self, model: str, audio: Path, vocals: Path, music: Path) -> None:
-        """Split `audio` into his voice and everything else (deploy/gpu/demucs_server.py behind llama-swap).
+        """Split `audio` into the speaker's voice and everything else (deploy/gpu/demucs_server.py behind llama-swap).
         The answer is a ZIP with vocals.wav and no_vocals.wav; both directions are streamed to disk."""
         headers = {"Content-Type": "audio/wav", "Content-Length": str(audio.stat().st_size)}
         t0 = time.monotonic()
