@@ -199,6 +199,45 @@ export function makeShorts(run: string, lang: "dub" | "original"): Promise<Job> 
   return post(`${runPath(run)}/shorts`, { lang });
 }
 
+/** A voice sample to listen to: the sample itself and the test sentences cloned from it. */
+export interface VoiceSample {
+  sim: number | null; // how much the clones sound like the speaker, 0..1 (null: not scored)
+  path: string; // relative to the run, for fileUrl
+  tests: string[];
+}
+
+/** A run's voice samples (server/src/voice.rs, from `localdub voice`). */
+export interface VoiceSamples {
+  lang: string;
+  lines: string[]; // the test sentences, in the order of each sample's tests
+  scored: boolean;
+  candidates: (VoiceSample & { n: number; start: number; end: number })[];
+  current: (VoiceSample & { from: string }) | null; // the channel's voice now
+  picked: number | string | null;
+}
+
+/** The run's voice samples, or null if it has none yet. */
+export async function getVoiceSamples(run: string): Promise<VoiceSamples | null> {
+  const response = await fetch(`${runPath(run)}/voice`);
+  if (response.status === 404) return null;
+  return (await check(response)).json();
+}
+
+/** Makes voice samples from the run's speech to compare with the channel's voice now (a GPU job). */
+export function makeVoiceSamples(run: string): Promise<Job> {
+  return post(`${runPath(run)}/voice`);
+}
+
+/** Makes a candidate (or "current": keep it) the channel's voice. */
+export function pickVoice(run: string, pick: number | "current"): Promise<Job> {
+  return post(`${runPath(run)}/voice/pick`, { pick });
+}
+
+/** Dubs a finished run again with the channel's voice. */
+export function revoice(run: string): Promise<Job> {
+  return post(`${runPath(run)}/revoice`);
+}
+
 export async function getReview(run: string): Promise<Review> {
   return (await check(await fetch(`${runPath(run)}/review`))).json();
 }

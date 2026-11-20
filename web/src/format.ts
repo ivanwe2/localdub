@@ -107,7 +107,39 @@ const WAITING: Record<string, string> = {
   review1: "Review 1 of 2 (the transcript)",
   review2: "Review 2 of 2 (the translation)",
   shorts: "Pick the Shorts",
+  voice: "Pick a voice",
 };
+
+/** Review 1's voice choice: the value of its `voice:` line ("auto", "2", …); null if it has none. */
+export function voiceLine(text: string): string | null {
+  const line = text.split("\n").find((l) => /^voice:/i.test(l.trim()));
+  return line === undefined ? null : line.trim().slice("voice:".length).trim();
+}
+
+/** The review text with its `voice:` line set to this choice; unchanged if it has no such line. */
+export function setVoiceLine(text: string, choice: string): string {
+  return text
+    .split("\n")
+    .map((l) => (/^voice:/i.test(l.trim()) ? `voice: ${choice}` : l))
+    .join("\n");
+}
+
+/**
+ * How full a likeness bar is: scores bunch up between 0.85 and 1 (anything human-like scores
+ * above 0.8), so the bar spans 0.8 → 1.
+ */
+export function likenessShare(sim: number): number {
+  return Math.min(1, Math.max(0, (sim - 0.8) / 0.2));
+}
+
+/** A stretch of the video, "01:20–01:38" (whole seconds). */
+export function stretch(start: number, end: number): string {
+  const mmss = (s: number) => {
+    const whole = Math.round(s);
+    return `${String(Math.floor(whole / 60)).padStart(2, "0")}:${String(whole % 60).padStart(2, "0")}`;
+  };
+  return `${mmss(start)}–${mmss(end)}`;
+}
 
 /** What a person has to do while the job (or a run) waits, in words. */
 export function waitingText(job: Pick<Job, "waiting_for">): string {

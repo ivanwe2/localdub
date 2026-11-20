@@ -81,15 +81,16 @@ pub enum Pick {
     Word(String),
 }
 
+const PICK_RULE: &str = "a candidate's number, or \"current\" to keep the channel's voice";
+
 impl Pick {
     /// The engine's `--pick` argument, or why this pick is refused.
     pub fn as_arg(&self) -> Result<String, String> {
         match self {
             Pick::Number(n) if (1..=99).contains(n) => Ok(n.to_string()),
             Pick::Word(word) if word == "current" => Ok(word.clone()),
-            other => Err(format!(
-                "pick {other:?}: a candidate's number, or \"current\" to keep the channel's voice"
-            )),
+            Pick::Number(n) => Err(format!("pick {n}: {PICK_RULE}")),
+            Pick::Word(word) => Err(format!("pick {word:?}: {PICK_RULE}")),
         }
     }
 }

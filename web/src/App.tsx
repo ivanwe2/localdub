@@ -30,6 +30,8 @@ import {
   dictionaryNote,
   findChannel,
   languageFields,
+  setVoiceLine,
+  voiceLine,
   formatBytes,
   formatSeconds,
   sparkline,
@@ -39,6 +41,7 @@ import {
   uploadName,
   waitingText,
 } from "./format";
+import VoicePicker from "./VoicePicker";
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -490,7 +493,10 @@ function Runs({ runs, error, busy, onChange }: RunsProps) {
 function RunItem({ run, busy, onChange }: { run: RunSummary; busy: boolean; onChange: () => void }) {
   const [watching, setWatching] = useState(false);
   const [reviewing, setReviewing] = useState(false);
+  const [voicing, setVoicing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const waitsForVoice = run.waiting_for?.kind === "voice";
+  const transcribed = run.done.includes("spelling");
   const { video, subtitles, shorts } = run.files;
   const facts = [run.channel, new Date(run.created).toLocaleString()];
   if (run.seconds != null) facts.push(formatSeconds(run.seconds));
@@ -514,12 +520,17 @@ function RunItem({ run, busy, onChange }: { run: RunSummary; busy: boolean; onCh
         <span className={`badge ${run.finished ? "done" : run.waiting_for ? "waiting" : "partial"}`}>{state}</span>
       </div>
       <div className="links">
-        {run.waiting_for && (
+        {run.waiting_for && !waitsForVoice && (
           <button type="button" className="link" onClick={() => setReviewing(!reviewing)}>
             {reviewing ? "Close" : waitingText(run)}
           </button>
         )}
-        {!run.finished && !run.waiting_for && (
+        {(waitsForVoice || (transcribed && !run.waiting_for)) && (
+          <button type="button" className="link" onClick={() => setVoicing(!voicing)}>
+            {voicing ? "Close the voices" : waitsForVoice ? waitingText(run) : "Voice…"}
+          </button>
+        )}
+        {!run.finished && (!run.waiting_for || waitsForVoice) && (
           <button type="button" className="link" disabled={busy} onClick={() => act(() => continueRun(run.name))}>
             Continue
           </button>
@@ -561,7 +572,8 @@ function RunItem({ run, busy, onChange }: { run: RunSummary; busy: boolean; onCh
         )}
       </div>
       {error && <p className="error">{error}</p>}
-      {reviewing && run.waiting_for && (
+      {voicing && <VoicePicker run={run.name} finished={run.finished} busy={busy} onChange={onChange} />}
+      {reviewing && run.waiting_for && !waitsForVoice && (
         <ReviewPanel
           run={run.name}
           busy={busy}
@@ -626,6 +638,7 @@ function ReviewPanel({ run, busy, onDone }: { run: string; busy: boolean; onDone
   const shorts = review.kind === "shorts";
   const list = shorts ? candidates(text) : [];
   const picked = list.filter((c) => c.picked).length;
+  const voice = review.kind === "review1" ? voiceLine(text) : null; // the voice is chosen here too
   return (
     <div className="review">
       <p className="muted">
@@ -634,6 +647,13 @@ function ReviewPanel({ run, busy, onDone }: { run: string; busy: boolean; onDone
           ? " · tick the Shorts to render (3 is a good number)."
           : " · fix what's wrong; the comments at the top explain the format."}
       </p>
+      {voice !== null && (
+        <VoicePicker
+          run={run}
+          busy={busy}
+          review={{ chosen: voice, choose: (n) => edit(setVoiceLine(text, String(n))) }}
+        />
+      )}
       {shorts && !asText ? (
         <ul className="candidates">
           {list.map((c) => (

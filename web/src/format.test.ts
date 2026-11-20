@@ -7,6 +7,10 @@ import {
   dictionaryNote,
   findChannel,
   languageFields,
+  likenessShare,
+  setVoiceLine,
+  stretch,
+  voiceLine,
   candidates,
   formatBytes,
   formatSeconds,
@@ -191,5 +195,23 @@ describe("a new channel's languages", () => {
     expect(dictionaryNote(language("de", true))).toBe("");
     expect(dictionaryNote(language("de", true, false))).toBe(" (dictionary missing: apt-get install hunspell-de)");
     expect(dictionaryNote({ ...language("xx", false, false), dictionary: null })).toBe(" (no spelling check)");
+  });
+});
+
+describe("the voice picker", () => {
+  const REVIEW = "status: pending\n# Voice sample: candidates…\n#   2. 00:40-00:52\nvoice: auto\n\n[3] 00:12   unknown: x\nBG: …\n";
+
+  it("reads and sets review 1's voice line, and nothing else", () => {
+    expect(voiceLine(REVIEW)).toBe("auto");
+    const set = setVoiceLine(REVIEW, "2");
+    expect(voiceLine(set)).toBe("2");
+    expect(set.replace("voice: 2", "voice: auto")).toBe(REVIEW);
+    expect(voiceLine("status: pending\n[1] BG: x\n")).toBeNull();
+    expect(setVoiceLine("status: pending\n", "2")).toBe("status: pending\n");
+  });
+
+  it("spreads likeness scores over the bar and writes stretches as timecodes", () => {
+    expect([0.7, 0.8, 0.9, 0.97, 1.2].map(likenessShare).map((x) => Math.round(x * 100))).toEqual([0, 0, 50, 85, 100]);
+    expect(stretch(80.2, 97.6)).toBe("01:20–01:38");
   });
 });
