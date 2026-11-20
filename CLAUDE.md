@@ -50,7 +50,7 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 
 ## Conventions
 
-- Python ≥ 3.10; the core needs only numpy (+ ffmpeg, hunspell). Optional extra `voice` = transformers.
+- Python ≥ 3.10; the core needs only numpy and num2words (+ ffmpeg, hunspell). Optional extra `voice` = transformers.
 - CLI exit codes: 0 done, 3 waiting for a human, 1 error. Runs live in `~/dub/runs/NAME/`
   (`state.json` = stages done), channels in `~/dub/channels/NAME/`.
 - Tests: `python -m pytest -q -m "not slow"` (seconds); `python -m pytest -q` also runs two
@@ -141,8 +141,6 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 - Review 1 lists too much on full videos (~12% unknown words); fix one line without approving all
   of review 2; `--fast` mode (translation thinking off).
 - Clipped endings inside a word ("vide") still pass the take check.
-- Language assumptions left in the engine: the spelling prompt's examples are Bulgarian; the take
-  check spells out numbers in English only; voice test sentences (`speaker.CALIBRATION`) are English only.
 - Voice candidates: the test clones aren't checked like real takes (TTS sometimes fluffs words); score
   differences ≲ 0.01 are noise with 4 sentences × 1 seed (Nov 12: candidates 0.966 / 0.957 / 0.930,
   Ivan's ref.wav 0.956; ranking matched his ear). The score shortlists, the ear decides close calls.

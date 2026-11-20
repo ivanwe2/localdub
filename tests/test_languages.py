@@ -130,3 +130,21 @@ def test_a_media_language_tag_is_iso_639_2():
     from localdub.run import iso3
 
     assert (iso3("de"), iso3("bg"), iso3("zz")) == ("deu", "bul", "und")
+
+
+def test_the_prompts_take_their_examples_from_the_language():
+    from localdub.text import number_example, spelling_hint
+
+    assert number_example("en") == '"two hundred thousand", not "200,000"'  # what the prompt always said
+    assert number_example("de") == '"zweihunderttausend", not "200.000"'
+    assert number_example("bg") == "not as digits"
+    assert "фсички" in spelling_hint("bg") and spelling_hint("de") == ""
+
+
+def test_caption_chunks_keep_abbreviations_of_any_language_whole():
+    from localdub.shorts import _chunks
+
+    assert _chunks(["Dr.", "Ivanov", "came."]) == [[0, 1, 2]]
+    assert _chunks(["ул.", "Шипка"]) == [[0, 1]]
+    assert _chunks(["Sra.", "López"]) == [[0, 1]]
+    assert _chunks(["Go.", "Now."]) == [[0], [1]]

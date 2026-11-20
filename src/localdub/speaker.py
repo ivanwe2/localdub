@@ -24,14 +24,6 @@ from pathlib import Path
 import numpy as np
 
 RATE = 16000
-CALIBRATION = {  # sentences each candidate voice sample is cloned with, per target language
-    "en": [
-        "Hi everyone, welcome back to the channel, today we have something really fun for you.",
-        "I honestly did not expect it to be this cheap, but here we are.",
-        "So we packed our bags, grabbed the camera, and went straight to the city centre.",
-        "Let me know in the comments what you would have done in my place.",
-    ],
-}
 
 
 def log(msg: str) -> None:

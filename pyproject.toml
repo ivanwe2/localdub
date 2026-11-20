@@ -9,7 +9,7 @@ description = "Dub videos into another language in the creator's own cloned voic
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
-dependencies = ["numpy>=1.24"]
+dependencies = ["numpy>=1.24", "num2words>=0.5.13"]
 
 [project.optional-dependencies]
 # speaker fingerprints for choosing the voice sample and the takes (WavLM x-vectors; needs torch)
