@@ -85,8 +85,9 @@ and run `localdub run NAME` again.
   words). On a channel's first video it lists the candidate voice samples with their "sounds like
   the speaker" scores: keep `voice: auto` (the best), write a number, a stretch (`voice: 01:20-01:38`) or a
   WAV path. Nothing doubtful and a known voice: no stop.
-- **Review 2, the translation**: every line with its time slot and character budget; an empty `EN:`
-  line stays silent; terms go under `glossary:` as `хлебарки = cockroaches`.
+- **Review 2, the translation**: every line with its time slot and character budget, marked with
+  the languages' codes (`BG:` the original, `EN:` the dub); an empty dub line stays silent; terms go
+  under `glossary:` as `source term = dub term` (e.g. `хлебарки = cockroaches`).
 
 ### Shorts
 

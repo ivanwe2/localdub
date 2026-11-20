@@ -26,6 +26,7 @@ from pathlib import Path
 import numpy as np
 
 from . import events, languages, media, review
+from .segments import upgrade, upgrade_all
 from .llm import LLMError, Server
 from .mix import mix, mux, place, subtitles
 from .settings import Profile, home, load_settings
@@ -78,7 +79,7 @@ class Run:
 
     @property
     def segs(self) -> list[dict]:
-        return read_json(self.p("segments.json"))
+        return upgrade_all(read_json(self.p("segments.json")))  # older runs: "bg"/"en" keys
 
     @segs.setter
     def segs(self, value: list[dict]) -> None:
@@ -216,7 +217,7 @@ def _changed_pairs(old: list[str], new: list[str]) -> list[tuple[int, int]]:
 
 
 def learn_transcript(parsed: dict, segs: list[dict], report: dict, profile: Profile) -> dict:
-    """Apply your BG edits and remember what they teach.
+    """Apply your edits of the transcript and remember what they teach.
 
     corrections   a misspelled word you fixed (or an automatic fix you kept) is fixed the same way next time;
                   a name you corrected mid-sentence too
@@ -225,11 +226,11 @@ def learn_transcript(parsed: dict, segs: list[dict], report: dict, profile: Prof
     An automatic fix you undid is forgotten and the original word accepted.
     """
     by_id = {s["id"]: s for s in segs}
-    edits = {sid: t for sid, t in parsed["bg"].items() if sid in by_id and t.split()}
+    edits = {sid: t for sid, t in parsed["src"].items() if sid in by_id and t.split()}
     corr, names = profile["corrections"], profile["names"]
     accepted = set(profile["accepted_words"])
     base = Speller(profile["hunspell_dict"], [])
-    unknown = base.unknown({core(w) for sid, t in edits.items() for w in t.split() + by_id[sid]["bg"].split()})
+    unknown = base.unknown({core(w) for sid, t in edits.items() for w in t.split() + by_id[sid]["src"].split()})
     n = {"edited": 0, "corrections": 0, "names": 0, "accepted": 0}
 
     def add_correction(a, b):
@@ -247,7 +248,7 @@ def learn_transcript(parsed: dict, segs: list[dict], report: dict, profile: Prof
 
     for sid, text in edits.items():
         s, r = by_id[sid], report.get(sid, {})
-        old, new = s["bg"].split(), text.split()
+        old, new = s["src"].split(), text.split()
         auto = {(core(b), core(a)) for a, b in r.get("fixes", []) + r.get("learned", [])}  # (fixed, original)
         for i, j in _changed_pairs(old, new):
             a, b = core(old[i]), core(new[j])
@@ -276,9 +277,9 @@ def learn_transcript(parsed: dict, segs: list[dict], report: dict, profile: Prof
                 elif w not in accepted:
                     accepted.add(w)
                     n["accepted"] += 1
-        if text != s["bg"]:
+        if text != s["src"]:
             replace_words(s, text)
-            s["bg"] = text_of(s["words"])
+            s["src"] = text_of(s["words"])
             n["edited"] += 1
     profile["accepted_words"] = sorted(accepted)
     return n
@@ -361,7 +362,7 @@ def set_voice(run: Run, profile: Profile, choice: str) -> str:
 
 def stage_review1(run: Run, ctx: Ctx):
     path = run.p("review-1-transcript.txt")
-    segs = read_json(run.p("spelled.json"))
+    segs = upgrade_all(read_json(run.p("spelled.json")))
     report = {int(k): v for k, v in read_json(run.p("spelling.json")).items()}
     profile = ctx.profile
     has_voice = profile.voice_path is not None and profile.voice_path.exists()
@@ -379,7 +380,7 @@ def stage_review1(run: Run, ctx: Ctx):
                 voice = {"candidates": cands}
             else:
                 voice = {"path": None}
-        count = review.write_transcript_review(path, segs, report, voice)
+        count = review.write_transcript_review(path, segs, report, voice, profile["source_lang"])
         if ctx.no_review:
             if not has_voice:
                 log(f"   voice sample: {set_voice(run, profile, 'auto')}")
@@ -391,7 +392,7 @@ def stage_review1(run: Run, ctx: Ctx):
             return None
         what = f"{count} lines to check" + (", and the voice sample to listen to" if voice else "")
         return waiting(ctx, "review1", "Review 1 of 2 is ready (the transcript)", path, what + ".")
-    parsed = review.parse(path)
+    parsed = review.parse(path, profile["source_lang"], profile["target_lang"])
     if parsed["status"] != "approved":
         return waiting(ctx, "review1", "Review 1 of 2 is still waiting for you", path)
     n = learn_transcript(parsed, segs, report, profile)
@@ -406,25 +407,25 @@ def stage_review1(run: Run, ctx: Ctx):
 def stage_translate(run: Run, ctx: Ctx):
     segs = run.segs
     partial = run.p("translate-partial.json")  # lines done so far, kept if the stage is interrupted
-    done = read_json(partial) if partial.exists() else {}
+    done = {k: upgrade(v) for k, v in read_json(partial).items()} if partial.exists() else {}
     for s in segs:
-        for k in ("en", "model_en", "take", "shortened_from"):
+        for k in ("tgt", "model_tgt", "take", "shortened_from"):
             s.pop(k, None)
         d = done.get(str(s["id"]))
-        if d and d["bg"] == s["bg"]:
-            s["en"] = d["en"]
+        if d and d["src"] == s["src"]:
+            s["tgt"] = d["tgt"]
     if done:
-        log(f"   {sum(1 for s in segs if s.get('en'))} lines already translated before the interruption")
+        log(f"   {sum(1 for s in segs if s.get('tgt'))} lines already translated before the interruption")
 
     def save():
-        write_json(partial, {str(s["id"]): {"bg": s["bg"], "en": s["en"]}
-                             for s in segs if s.get("en") and s["en"] != "[MISSING]"})
+        write_json(partial, {str(s["id"]): {"src": s["src"], "tgt": s["tgt"]}
+                             for s in segs if s.get("tgt") and s["tgt"] != "[MISSING]"})
 
     translate(segs, ctx.server, ctx.settings, ctx.profile, progress=save)
     run.segs = segs
     partial.unlink(missing_ok=True)
-    over = sum(1 for s in segs if len(s["en"]) > s["budget"])
-    missing = sum(1 for s in segs if s["en"] == "[MISSING]")
+    over = sum(1 for s in segs if len(s["tgt"]) > s["budget"])
+    missing = sum(1 for s in segs if s["tgt"] == "[MISSING]")
     log(f"   {len(segs)} lines; {over} still over their character budget" + (f", {missing} MISSING" if missing else ""))
 
 
@@ -432,27 +433,27 @@ def stage_review2(run: Run, ctx: Ctx):
     path = run.p("review-2-translation.txt")
     segs = run.segs
     if not path.exists():
-        review.write_translation_review(path, segs)
+        review.write_translation_review(path, segs, ctx.profile["source_lang"], ctx.profile["target_lang"])
         if ctx.no_review:
             log("   review skipped (--no-review); nothing is learned from this run")
             return None
-        over = sum(1 for s in segs if len(s["en"]) > s["budget"])
+        over = sum(1 for s in segs if len(s["tgt"]) > s["budget"])
         return waiting(ctx, "review2", "Review 2 of 2 is ready (the translation)", path,
                        f"{len(segs)} lines, {over} marked OVER (they will be sped up, up to "
-                       f"{round((ctx.settings['max_speedup'] - 1) * 100)}%). An empty EN line is left silent.")
-    parsed = review.parse(path)
+                       f"{round((ctx.settings['max_speedup'] - 1) * 100)}%). An empty {review.label(ctx.profile['target_lang'])} line is left silent.")
+    parsed = review.parse(path, ctx.profile["source_lang"], ctx.profile["target_lang"])
     if parsed["status"] != "approved":
         return waiting(ctx, "review2", "Review 2 of 2 is still waiting for you", path)
     for s in segs:
-        if s["id"] in parsed["en"]:
-            s["en"] = parsed["en"][s["id"]]
-    missing = [s["id"] for s in segs if s["en"].strip() == "[MISSING]"]
+        if s["id"] in parsed["tgt"]:
+            s["tgt"] = parsed["tgt"][s["id"]]
+    missing = [s["id"] for s in segs if s["tgt"].strip() == "[MISSING]"]
     if missing:
-        raise RuntimeError(f"review 2: lines {missing} still say [MISSING]; write them (or leave EN empty) "
+        raise RuntimeError(f"review 2: lines {missing} still say [MISSING]; write them (or leave the line empty) "
                            f"and set 'status: approved' again")
     today = dt.date.today().isoformat()
-    entries = [{"src": s["bg"], "tgt": s["en"], "model_en": s["model_en"], "edited": s["en"] != s["model_en"],
-                "video": run.name, "date": today} for s in segs if s["en"].strip()]
+    entries = [{"src": s["src"], "tgt": s["tgt"], "model_tgt": s["model_tgt"], "edited": s["tgt"] != s["model_tgt"],
+                "video": run.name, "date": today} for s in segs if s["tgt"].strip()]
     ctx.profile.remember(entries)
     ctx.profile["glossary"].update(parsed["glossary"])
     ctx.profile.save()
@@ -465,7 +466,7 @@ def stage_voice(run: Run, ctx: Ctx):
     segs = run.segs
     for s in segs:  # a redo starts from the translated text, not from an earlier automatic shortening
         if s.get("shortened_from"):
-            s["en"] = s.pop("shortened_from")
+            s["tgt"] = s.pop("shortened_from")
     if local(ctx, "nemo"):  # the voice clone stays on the server (GPU 0), the check runs here (GPU 1)
         ctx.server.unload_all(keep=ctx.settings["tts_model"])
         log(f"   {ctx.settings['tts_model']} on the model server, checking each take with Nemotron on "
@@ -486,8 +487,8 @@ def stage_voice(run: Run, ctx: Ctx):
         # too long in every take: the text itself doesn't fit. Shorten to the length the voice needs, re-voice.
         log(f"   {len(over)} lines are too long in every take: shortening them to their measured length")
         speed = ctx.settings["max_speedup"]
-        before = {s["id"]: s["en"] for s in over}
-        items = [(s, max(8, int(len(s["en"]) * float(s["slot"]) * speed / s["take"]["spoken"] * 0.92)))
+        before = {s["id"]: s["tgt"] for s in over}
+        items = [(s, max(8, int(len(s["tgt"]) * float(s["slot"]) * speed / s["take"]["spoken"] * 0.92)))
                  for s in over]
         changed = shorten_to(items, ctx.server, ctx.settings, ctx.profile, f"shortening {len(over)} lines to fit")
         for s in changed:
@@ -517,13 +518,13 @@ def stage_voice(run: Run, ctx: Ctx):
         log(f"   sounds like the speaker: median {sims[len(sims) // 2]:.2f}, lowest 10% below {sims[len(sims) // 10]:.2f}")
 
 
-def write_checklist(path: Path, segs: list[dict], video: Path) -> int:
+def write_checklist(path: Path, segs: list[dict], video: Path, tgt: str) -> int:
     lines = [f"# Lines worth a listen in {video.name}", ""]
     count = 0
     for s in segs:
         notes = []
         t = s.get("take")
-        if s.get("en", "").strip() and not t:
+        if s.get("tgt", "").strip() and not t:
             notes.append("no audio")
         if t and not t["ok"]:
             notes.append(f"failed the check after {t['tries']} takes ({t['why']}); heard: \"{t['heard']}\"")
@@ -535,7 +536,7 @@ def write_checklist(path: Path, segs: list[dict], video: Path) -> int:
             notes.append(f"shortened to fit, was: \"{s['shortened_from']}\"")
         if notes:
             count += 1
-            lines += [f"[{s['id']}] {media.mmss(s['start'])}   " + "   ".join(notes), f"EN: {s.get('en', '')}", ""]
+            lines += [f"[{s['id']}] {media.mmss(s['start'])}   " + "   ".join(notes), f"{review.label(tgt)}: {s.get('tgt', '')}", ""]
     if count == 0:
         lines.append("Nothing: every line passed the check and fits.")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -555,7 +556,7 @@ def stage_mix(run: Run, ctx: Ctx):
     out = run.p(f"{run.name}.{tgt_l}.mp4")
     mux(Path(run.state["video"]), run.p("dub-mix.wav"), out, iso3(tgt_l), iso3(src_l))
     subtitles(segs, run.p(f"{run.name}.{src_l}.srt"), run.p(f"{run.name}.{tgt_l}.srt"))
-    n = write_checklist(run.p("check.txt"), segs, out)
+    n = write_checklist(run.p("check.txt"), segs, out, ctx.profile["target_lang"])
     run.state["outputs"] = {"video": str(out), "subtitles": [str(run.p(f"{run.name}.{tgt_l}.srt")),
                                                             str(run.p(f"{run.name}.{src_l}.srt"))],
                             "check": str(run.p("check.txt")), "lines_to_check": n, "levels": levels}

@@ -34,6 +34,7 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 | `src/localdub/languages.py` | the language table (name, ISO 639-2, hunspell dict + apt package, num2words code, separators, abbreviations, calibration sentences, spelling hints); what can be dubbed into is the setting `tts_languages` |
 | `src/localdub/llm.py` | llama-swap client: chat (JSON repair, retries), TTS, transcription, separation, unload |
 | `src/localdub/text.py` | sentences, spelling guard, translation, shortening |
+| `src/localdub/segments.py` | a segment's text keys are `src`/`tgt`/`model_tgt`; `upgrade()` renames the pre-0.9.0 `bg`/`en`/`model_en` when old runs are read. Review files mark lines with the channel's codes (`review.label`: `BG:`, `EN:`, `DE:`…) |
 | `src/localdub/voice.py` | voice-sample candidates, takes, the take check (`judge`), fitting |
 | `src/localdub/speaker.py` | speaker fingerprints (WavLM x-vectors), voiceprint, similarity |
 | `src/localdub/mix.py` | placement (late starts), mixing, muxing, subtitles |

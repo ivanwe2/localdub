@@ -228,7 +228,7 @@ def spellcheck(segs, server, settings, profile) -> dict:
             if c and Speller.is_misspelled(c, final) and c not in seen:
                 seen.append(c)
         report[s["id"]]["unknown"] = seen
-        s["bg"] = text_of(s["words"])
+        s["src"] = text_of(s["words"])
     return report
 
 
@@ -248,6 +248,15 @@ TRANSLATE_PROMPT = (
     'Reply with JSON only: {{"lines": [{{"id": <line id>, "text": "<translation>"}}]}}, one entry for every '
     "line to translate, in order."
 )
+
+def reply_text(item: dict) -> str:
+    """The text of one line in the translator's reply: its "text", or else the first other text field
+    (models sometimes name it after the language, like "en" or "de")."""
+    text = item.get("text")
+    if not isinstance(text, str) or not text.strip():
+        text = next((v for k, v in item.items() if k != "id" and isinstance(v, str) and v.strip()), "")
+    return text.strip()
+
 
 def speaker_note(speaker: str) -> str:
     """For gendered languages: who speaks, so first-person forms ("I was tired") come out right."""
@@ -308,7 +317,7 @@ def memory_examples(texts: list[str], memory: list[dict], k: int = 6) -> list[di
 
 
 def translate(segs, server, settings, profile, progress=None) -> None:
-    """Fill s["en"] for every line. Lines that already have one (from an interrupted run) are kept;
+    """Fill s["tgt"] for every line. Lines that already have one (from an interrupted run) are kept;
     `progress()` is called after each request so the caller can save what's done."""
     src, tgt = profile["source_language_name"], profile["target_language_name"]
     system = TRANSLATE_PROMPT.format(src=src, tgt=tgt, style=profile["style"],
@@ -318,11 +327,11 @@ def translate(segs, server, settings, profile, progress=None) -> None:
     for start in range(0, len(segs), 20):
         chunk = segs[start:start + 20]
         context = segs[max(0, start - 3):start]
-        todo = [s for s in chunk if not s.get("en")]
+        todo = [s for s in chunk if not s.get("tgt")]
         for _ in range(3):
             if not todo:
                 break
-            texts = [s["bg"] for s in todo]
+            texts = [s["src"] for s in todo]
             gloss = {}
             for t in texts:
                 gloss.update(glossary_hits(t, profile["glossary"]))
@@ -336,43 +345,43 @@ def translate(segs, server, settings, profile, progress=None) -> None:
                 parts.append("Examples:\n" + "\n".join(f"{e['src']}\n   -> {e['tgt']}" for e in ex))
             if context:
                 parts.append("Context (already translated):\n" + "\n".join(
-                    f"{c['id']}: {c['bg']}\n   -> {c.get('en', '')}" for c in context))
+                    f"{c['id']}: {c['src']}\n   -> {c.get('tgt', '')}" for c in context))
             parts.append("Translate:\n" + "\n".join(
-                f"{s['id']} [{s['slot']:.1f}s, max {s['budget']} chars]: {s['bg']}" for s in todo))
+                f"{s['id']} [{s['slot']:.1f}s, max {s['budget']} chars]: {s['src']}" for s in todo))
             reply = server.chat_json(settings["text_model"], system, "\n\n".join(parts),
                                      settings["translate_effort"], 16384,
                                      f"translating {todo[0]['id']}-{todo[-1]['id']}")
             got = {}
             for x in reply.get("lines", []):
                 try:
-                    got[int(x["id"])] = str(x.get("text") or x.get("en") or "").strip()
+                    got[int(x["id"])] = reply_text(x)
                 except (KeyError, TypeError, ValueError):
                     continue
             for s in todo:
                 if got.get(s["id"]):
-                    s["en"] = got[s["id"]]
-            todo = [s for s in chunk if not s.get("en")]
+                    s["tgt"] = got[s["id"]]
+            todo = [s for s in chunk if not s.get("tgt")]
         for s in todo:
-            s["en"] = "[MISSING]"
+            s["tgt"] = "[MISSING]"
         if progress:
             progress()
 
     # one round of shortening for lines over budget; if it fails, the longer lines stay (and get sped up)
-    over = [s for s in segs if len(s["en"]) > s["budget"] and s["en"] != "[MISSING]"]
+    over = [s for s in segs if len(s["tgt"]) > s["budget"] and s["tgt"] != "[MISSING]"]
     if over:
         shorten_to([(s, s["budget"]) for s in over], server, settings, profile, f"shortening {len(over)} lines")
     for s in segs:
-        s["model_en"] = s["en"]
+        s["model_tgt"] = s["tgt"]
 
 
 def shorten_to(items: list[tuple[dict, int]], server, settings, profile, label: str) -> list[dict]:
-    """Ask for shorter versions of s["en"] within max_chars; keep only replies that are shorter.
+    """Ask for shorter versions of s["tgt"] within max_chars; keep only replies that are shorter.
     Returns the lines that changed. A failed request changes nothing."""
     from .llm import LLMError
-    items = [(s, n) for s, n in items if len(s["en"]) >= 25 and len(s["en"].split()) >= 4]  # too short to cut
+    items = [(s, n) for s, n in items if len(s["tgt"]) >= 25 and len(s["tgt"].split()) >= 4]  # too short to cut
     if not items:
         return []
-    user = "\n".join(f"{s['id']} [max {n} chars, now {len(s['en'])}]: {s['en']}" for s, n in items)
+    user = "\n".join(f"{s['id']} [max {n} chars, now {len(s['tgt'])}]: {s['tgt']}" for s, n in items)
     try:
         reply = server.chat_json(settings["text_model"], SHORTEN_PROMPT.format(tgt=profile["target_language_name"]),
                                  user, settings["shorten_effort"], 8192, label)
@@ -387,9 +396,9 @@ def shorten_to(items: list[tuple[dict, int]], server, settings, profile, label: 
         except (KeyError, TypeError, ValueError):
             continue
         new = str(x.get("text", "")).strip()
-        if re.search(r"\d", new) and not re.search(r"\d", s["en"]):
+        if re.search(r"\d", new) and not re.search(r"\d", s["tgt"]):
             continue  # "Seven hundred!" -> "Seven 00!": digits are read out wrong, keep the words
-        if new and len(new) < len(s["en"]):
-            s["en"] = new
+        if new and len(new) < len(s["tgt"]):
+            s["tgt"] = new
             changed.append(s)
     return changed

@@ -184,7 +184,7 @@ def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedde
     ref_md5 = hashlib.md5(ref_bytes).hexdigest()
 
     def take_name(s, seed):
-        h = hashlib.md5((ref_md5 + s["en"]).encode()).hexdigest()[:8]
+        h = hashlib.md5((ref_md5 + s["tgt"]).encode()).hexdigest()[:8]
         return f"{s['id']:04d}-{h}-s{seed}"
 
     for s in segs:
@@ -192,7 +192,7 @@ def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedde
     seeds = settings["seeds"]
     max_speedup = settings["max_speedup"]
     takes: dict[int, list[dict]] = {s["id"]: [] for s in segs}
-    pending = [s for s in segs if s["en"].strip() and s["en"] != "[MISSING]"]
+    pending = [s for s in segs if s["tgt"].strip() and s["tgt"] != "[MISSING]"]
     checks_path = work / "checks.json"  # check results per take, so a redo only checks new takes
     checks = json.loads(checks_path.read_text(encoding="utf-8")) if checks_path.exists() else {}
 
@@ -220,7 +220,7 @@ def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedde
             name = take_name(s, seed)
             raw, trim = work / "raw" / f"{name}.wav", work / "trim" / f"{name}.wav"
             if not raw.exists():
-                raw.write_bytes(server.tts(settings["tts_model"], s["en"], lang, ref_b64, seed))
+                raw.write_bytes(server.tts(settings["tts_model"], s["tgt"], lang, ref_b64, seed))
                 new += 1
             if name not in checks or not trim.exists():
                 media.trim_silence(raw, trim, RATE)
@@ -246,7 +246,7 @@ def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedde
         for s in pending:
             name = take_name(s, seed)
             c = checks[name]
-            ok, w, why = judge(s["en"], c["heard"])
+            ok, w, why = judge(s["tgt"], c["heard"])
             if want > 1 and "sim" not in c:  # checked before similarity was on
                 from .speaker import embed_files, similarity
                 c["sim"] = checks[name]["sim"] = similarity(embed_files(embedder, [work / "trim" / f"{name}.wav"])[0], vp)

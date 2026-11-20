@@ -115,13 +115,13 @@ def subtitles(segs: list[dict], src_path: Path, tgt_path: Path) -> None:
             cur.append(w)
         if cur:
             src.append((cur[0]["start"], cur[-1]["end"], "\n".join(_wrap(text_of(cur)))))
-        if not s.get("en", "").strip():
+        if not s.get("tgt", "").strip():
             continue
         # target cues: from where the dub line starts for as long as it speaks, shared out by length
         begin = s.get("placed", s["start"])
         spoken = s["take"]["seconds"] if s.get("take") else s["end"] - s["start"]
         stop = begin + max(spoken, 1.0)
-        lines = _wrap(s["en"])
+        lines = _wrap(s["tgt"])
         chunks = ["\n".join(lines[i:i + 2]) for i in range(0, len(lines), 2)]
         total = sum(len(c) for c in chunks)
         t = begin
