@@ -1,6 +1,7 @@
-//! Runs the engine (`localdub ... --json`) as a child process and hands over what it prints the
-//! moment it prints it: each event (stdout) and each message for people (stderr), so the server can
-//! show progress and the engine's log while a run is going.
+//! Runs a program as a child process and hands over what it prints the moment it prints it, line
+//! by line: the engine (`localdub ... --json`: each event on stdout, each message for people on
+//! stderr), so the server can show progress and the engine's log while a run is going, and yt-dlp
+//! for downloads.
 
 use std::process::Stdio;
 
@@ -17,32 +18,51 @@ pub async fn run_engine(
     program: &str,
     args: &[String],
     mut on_event: impl FnMut(Event),
-    mut on_log: impl FnMut(String),
+    on_log: impl FnMut(String),
+) -> std::io::Result<i32> {
+    let mut all_args = args.to_vec();
+    all_args.push("--json".to_string());
+    let on_line = |line: String| {
+        if let Some(event) = parse_line(&line) {
+            on_event(event);
+        }
+    };
+    run_process(program, &all_args, on_line, on_log).await
+}
+
+/// Runs `program` with `args`, calls `on_out` for every line on stdout and `on_err` for every
+/// line on stderr as they arrive, and returns the exit code once it has ended (-1 if it was
+/// killed). A line that isn't valid UTF-8 is passed on with the broken bytes replaced.
+pub async fn run_process(
+    program: &str,
+    args: &[String],
+    mut on_out: impl FnMut(String),
+    mut on_err: impl FnMut(String),
 ) -> std::io::Result<i32> {
     let mut child = Command::new(program)
         .args(args)
-        .arg("--json")
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    let mut out = BufReader::new(child.stdout.take().expect("stdout is piped")).lines();
-    let mut err = BufReader::new(child.stderr.take().expect("stderr is piped")).lines();
+    let mut out = BufReader::new(child.stdout.take().expect("stdout is piped")).split(b'\n');
+    let mut err = BufReader::new(child.stderr.take().expect("stderr is piped")).split(b'\n');
+    let text = |bytes: Vec<u8>| {
+        let line = String::from_utf8_lossy(&bytes);
+        line.strip_suffix('\r').unwrap_or(&line).to_string()
+    };
 
-    // Read both at once until both are closed: a pipe nobody reads fills up and blocks the engine.
+    // Read both at once until both are closed: a pipe nobody reads fills up and blocks the program.
     // `select!` waits for whichever has a line first (C#: Task.WhenAny over the two reads).
     let (mut out_open, mut err_open) = (true, true);
     while out_open || err_open {
         tokio::select! {
-            line = out.next_line(), if out_open => match line? {
-                Some(line) => {
-                    if let Some(event) = parse_line(&line) {
-                        on_event(event);
-                    }
-                }
+            line = out.next_segment(), if out_open => match line? {
+                Some(line) => on_out(text(line)),
                 None => out_open = false,
             },
-            line = err.next_line(), if err_open => match line? {
-                Some(line) => on_log(line),
+            line = err.next_segment(), if err_open => match line? {
+                Some(line) => on_err(text(line)),
                 None => err_open = false,
             },
         }
@@ -150,6 +170,21 @@ mod tests {
             ),
             "expected an error result last, got {events:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn any_program_hands_over_its_lines_even_broken_ones() {
+        let script = r"printf 'one\r\ntwo \377\nlast without newline'; printf 'oops\n' >&2; exit 4";
+        let args = vec!["-c".to_string(), script.to_string()];
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+
+        let code = run_process("sh", &args, |l| out.push(l), |l| err.push(l))
+            .await
+            .unwrap();
+
+        assert_eq!(code, 4);
+        assert_eq!(out, ["one", "two \u{FFFD}", "last without newline"]);
+        assert_eq!(err, ["oops"]);
     }
 
     #[tokio::test]

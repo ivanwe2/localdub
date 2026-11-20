@@ -5,7 +5,10 @@ import {
   approve,
   defaultTarget,
   dictionaryNote,
+  downloadText,
   findChannel,
+  nameFromTitle,
+  partShare,
   languageFields,
   likenessShare,
   setVoiceLine,
@@ -213,5 +216,32 @@ describe("the voice picker", () => {
   it("spreads likeness scores over the bar and writes stretches as timecodes", () => {
     expect([0.7, 0.8, 0.9, 0.97, 1.2].map(likenessShare).map((x) => Math.round(x * 100))).toEqual([0, 0, 50, 85, 100]);
     expect(stretch(80.2, 97.6)).toBe("01:20–01:38");
+  });
+});
+
+describe("downloads", () => {
+  const d = { part: 1, parts: 2, downloaded_bytes: 45e6, total_bytes: 100e6, speed_bps: 12e6, eta_s: 42 };
+
+  it("says which file is coming and how far it is", () => {
+    expect(partShare(d)).toBe(0.45);
+    expect(downloadText(d)).toBe("Downloading the picture: 45% of 100 MB · 12 MB/s · 0:42 left");
+    expect(downloadText({ ...d, part: 2, downloaded_bytes: 1e6, total_bytes: 4e6, eta_s: null })).toBe(
+      "Downloading the sound: 25% of 4 MB · 12 MB/s",
+    );
+    expect(downloadText({ ...d, parts: 1, speed_bps: null })).toBe("Downloading: 45% of 100 MB · 0:42 left");
+  });
+
+  it("before the first byte, and at the end while yt-dlp puts the parts together", () => {
+    expect(downloadText({ ...d, part: 0 })).toBe("Looking up the video…");
+    expect(partShare({ ...d, total_bytes: null })).toBe(0);
+    expect(downloadText({ ...d, part: 2, downloaded_bytes: 4e6, total_bytes: 4e6 })).toBe(
+      "Putting the picture and the sound together…",
+    );
+    expect(downloadText({ ...d, parts: 1, downloaded_bytes: 100e6 })).toBe("Finishing…");
+  });
+
+  it("suggests a run name from the title", () => {
+    expect(nameFromTitle("Me at the zoo!")).toBe("Me-at-the-zoo");
+    expect(nameFromTitle("Пазарът в събота | част 2")).toBe("Пазарът-в-събота-част-2");
   });
 });

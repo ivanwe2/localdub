@@ -17,7 +17,7 @@ out=dist/localdub-app
 rm -rf "$out" && mkdir -p "$out"
 cp "${CARGO_TARGET_DIR:-server/target}/$target/release/localdub-server" "$out/"
 cp -r web/dist "$out/web"
-cp deploy/server/install.sh deploy/server/localdub-server.service "$out/"
+cp deploy/server/install.sh deploy/server/yt-dlp.sh deploy/server/localdub-server.service "$out/"
 echo "$build" > "$out/BUILD"
 tar -C dist -czf dist/localdub-app.tar.gz localdub-app
 echo "built dist/localdub-app.tar.gz ($(du -h dist/localdub-app.tar.gz | cut -f1)), $build"

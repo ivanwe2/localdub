@@ -12,6 +12,8 @@
 //!   LOCALDUB_MODELS_URL     llama-swap, for the models' and GPUs' status (default
 //!                           http://127.0.0.1:9876; "none" turns the status off)
 //!   LLAMA_API_KEY           its API key (the service reads it from /etc/llama.env)
+//!   LOCALDUB_YTDLP          yt-dlp's command, for downloading videos from links (default `yt-dlp`;
+//!                           "none" turns downloads off)
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -56,6 +58,10 @@ async fn main() -> std::io::Result<()> {
     let mut state = AppState::new(home, engine);
     if let Some(dir) = web {
         state = state.with_web(dir);
+    }
+    let ytdlp = std::env::var("LOCALDUB_YTDLP").unwrap_or_else(|_| "yt-dlp".to_string());
+    if ytdlp != "none" {
+        state = state.with_ytdlp(ytdlp.split_whitespace().map(String::from).collect());
     }
     let models_url = std::env::var("LOCALDUB_MODELS_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:9876".to_string());

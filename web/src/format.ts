@@ -1,6 +1,6 @@
 // Small pure helpers for the page; tested in format.test.ts.
 
-import type { Channel, Job, Language, StartRequest } from "./api";
+import type { Channel, Download, Job, Language, StartRequest } from "./api";
 
 /** The channel with this name (ignoring spaces around it), if it exists. */
 export function findChannel(name: string, channels: Channel[]): Channel | undefined {
@@ -92,6 +92,38 @@ export function uploadName(fileName: string): string {
   const ext = dot > 0 ? fileName.slice(dot + 1).toLowerCase().replace(/[^a-z0-9]/g, "") : "";
   const stem = clean(dot > 0 ? fileName.slice(0, dot) : fileName, 100) || "video";
   return ext ? `${stem}.${ext}` : stem;
+}
+
+/** A run name from a downloaded video's title: "Me at the zoo!" → "Me-at-the-zoo". */
+export function nameFromTitle(title: string): string {
+  return clean(title, 64);
+}
+
+type DownloadProgress = Pick<Download, "part" | "parts" | "downloaded_bytes" | "total_bytes">;
+
+/** How far the file coming now is, 0 to 1 (0 while its size is unknown). */
+export function partShare(d: DownloadProgress): number {
+  if (d.part === 0 || !d.total_bytes) return 0;
+  return Math.min(1, (d.downloaded_bytes ?? 0) / d.total_bytes);
+}
+
+/**
+ * What a download is doing, in words: "Downloading the picture: 45% of 120 MB · 12 MB/s · 0:42 left".
+ * YouTube sends the picture and the sound separately, and yt-dlp puts them together at the end.
+ */
+export function downloadText(d: DownloadProgress & Pick<Download, "speed_bps" | "eta_s">): string {
+  if (d.part === 0) return "Looking up the video…";
+  const share = partShare(d);
+  if (share >= 1 && d.part >= d.parts) {
+    return d.parts > 1 ? "Putting the picture and the sound together…" : "Finishing…";
+  }
+  const what =
+    d.parts === 2 ? (d.part === 1 ? " the picture" : " the sound") : d.parts > 2 ? ` part ${d.part} of ${d.parts}` : "";
+  let text = `Downloading${what}: ${Math.floor(share * 100)}%`;
+  if (d.total_bytes) text += ` of ${formatBytes(d.total_bytes)}`;
+  if (d.speed_bps) text += ` · ${formatBytes(d.speed_bps)}/s`;
+  if (d.eta_s != null) text += ` · ${formatSeconds(d.eta_s)} left`;
+  return text;
 }
 
 /** Letters, digits, '.', '_' and '-' only (others become '-'), starting with a letter or digit. */
