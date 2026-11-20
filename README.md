@@ -189,7 +189,9 @@ The API:
 | | |
 |---|---|
 | `GET /api/runs` | every run: its stages, files, and what it waits for (a review, picking Shorts) |
-| `POST /api/runs` | start one: `video`, `channel`, `name`, optional `no_review`, `shorts` |
+| `POST /api/runs` | start one: `video`, `channel`, `name`, optional `no_review`, `shorts`; for a new channel also `source` and `target` (language codes) and optionally `speaker` (`man`/`woman`) |
+| `GET /api/channels` | every channel: the languages it dubs from and into, its speaker, whether it has a voice |
+| `GET /api/languages` | the languages localdub knows (`localdub languages`): which can be dubbed into, which dictionaries are installed |
 | `GET` / `PUT /api/runs/<run>/review` | the file the run waits for: read it, save it (plain text) |
 | `POST /api/runs/<run>/continue` | go on after a review or an error, or render the picked Shorts |
 | `POST /api/runs/<run>/shorts` | propose Shorts for a finished run: `{"lang": "dub"}` or `"original"` |

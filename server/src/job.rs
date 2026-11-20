@@ -103,7 +103,7 @@ impl Job {
                 self.error = error;
             }
             Event::Call(call) => keep_last(&mut self.calls, call, KEEP_CALLS),
-            Event::Other => {}
+            Event::Languages { .. } | Event::Other => {} // nothing a run's progress shows
         };
     }
 

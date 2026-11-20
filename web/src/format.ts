@@ -1,6 +1,39 @@
 // Small pure helpers for the page; tested in format.test.ts.
 
-import type { Job } from "./api";
+import type { Channel, Job, Language, StartRequest } from "./api";
+
+/** The channel with this name (ignoring spaces around it), if it exists. */
+export function findChannel(name: string, channels: Channel[]): Channel | undefined {
+  return channels.find((c) => c.name === name.trim());
+}
+
+/**
+ * The start request's language fields: only a new channel sends them (an existing channel's
+ * languages are fixed), and the speaker only when one is chosen.
+ */
+export function languageFields(
+  channel: string,
+  channels: Channel[],
+  source: string,
+  target: string,
+  speaker: string,
+): Pick<StartRequest, "source" | "target" | "speaker"> {
+  if (findChannel(channel, channels)) return {};
+  return { source, target, ...(speaker === "man" || speaker === "woman" ? { speaker } : {}) };
+}
+
+/** The dub language a new channel starts with: English if it can be dubbed into, else the first. */
+export function defaultTarget(languages: Language[]): string {
+  const dub = languages.filter((l) => l.dub);
+  return (dub.find((l) => l.code === "en") ?? dub[0])?.code ?? "";
+}
+
+/** What the video-language list says about a language's spelling dictionary. */
+export function dictionaryNote(language: Language): string {
+  if (language.dictionary_installed) return "";
+  if (!language.dictionary) return " (no spelling check)";
+  return ` (dictionary missing: apt-get install ${language.apt ?? language.dictionary})`;
+}
 
 /** 170 → "2:50", 3725 → "1:02:05". */
 export function formatSeconds(seconds: number): string {

@@ -2,12 +2,16 @@ import { type FormEvent, useCallback, useEffect, useState } from "react";
 
 import {
   type Call,
+  type Channel,
   continueRun,
   fileUrl,
   followJob,
   followStatus,
   getReview,
   type Job,
+  type Language,
+  listChannels,
+  listLanguages,
   listRuns,
   listVideos,
   makeShorts,
@@ -22,6 +26,10 @@ import {
 import {
   approve,
   candidates,
+  defaultTarget,
+  dictionaryNote,
+  findChannel,
+  languageFields,
   formatBytes,
   formatSeconds,
   sparkline,
@@ -237,6 +245,13 @@ function NewRun({ busy }: { busy: boolean }) {
   const [shorts, setShorts] = useState(0);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // a new channel's languages (an existing channel keeps its own)
+  const [channels, setChannels] = useState<Channel[]>([]);
+  const [languages, setLanguages] = useState<Language[] | null>(null); // null: not asked yet
+  const [languagesError, setLanguagesError] = useState<string | null>(null);
+  const [source, setSource] = useState("");
+  const [target, setTarget] = useState("");
+  const [speaker, setSpeaker] = useState("");
 
   const refreshVideos = useCallback(() => {
     listVideos()
@@ -244,6 +259,28 @@ function NewRun({ busy }: { busy: boolean }) {
       .catch(() => setVideos([]));
   }, []);
   useEffect(refreshVideos, [refreshVideos]);
+
+  const refreshChannels = useCallback(() => {
+    listChannels()
+      .then(setChannels)
+      .catch(() => setChannels([]));
+  }, []);
+  useEffect(refreshChannels, [refreshChannels, busy]); // a run that starts or ends may have made one
+
+  const known = findChannel(channel, channels);
+  const isNew = channel.trim() !== "" && !known;
+  useEffect(() => {
+    if (!isNew || languages !== null) return; // asked once, when a new channel's name is typed
+    listLanguages()
+      .then((list) => {
+        setLanguages(list);
+        setTarget((current) => current || defaultTarget(list));
+      })
+      .catch((e) => {
+        setLanguages([]);
+        setLanguagesError(message(e));
+      });
+  }, [isNew, languages]);
 
   function chooseVideo(path: string) {
     setVideo(path);
@@ -269,7 +306,14 @@ function NewRun({ busy }: { busy: boolean }) {
     setError(null);
     setSending(true);
     try {
-      await startRun({ video: video.trim(), channel: channel.trim(), name: name.trim(), no_review: noReview, shorts });
+      await startRun({
+        video: video.trim(),
+        channel: channel.trim(),
+        name: name.trim(),
+        no_review: noReview,
+        shorts,
+        ...languageFields(channel, channels, source, target, speaker),
+      });
       remember("localdub.channel", channel.trim());
       setVideo("");
       setName("");
@@ -324,7 +368,26 @@ function NewRun({ busy }: { busy: boolean }) {
         <div className="row">
           <label>
             Channel
-            <input value={channel} onChange={(e) => setChannel(e.target.value)} placeholder="mychannel" required />
+            <input
+              value={channel}
+              onChange={(e) => setChannel(e.target.value)}
+              placeholder="mychannel"
+              list="channels"
+              required
+            />
+            <datalist id="channels">
+              {channels.map((c) => (
+                <option key={c.name} value={c.name}>
+                  {c.source_name} → {c.target_name}
+                </option>
+              ))}
+            </datalist>
+            {known && (
+              <span className="muted">
+                dubs {known.source_name} into {known.target_name}
+                {known.has_voice ? "" : "; its voice is chosen in the first review"}
+              </span>
+            )}
           </label>
           <label>
             Run name
@@ -339,6 +402,48 @@ function NewRun({ busy }: { busy: boolean }) {
             />
           </label>
         </div>
+        {isNew && (
+          <fieldset>
+            <legend>A new channel: its languages (they stay with the channel)</legend>
+            {languagesError && <p className="error">Couldn't load the languages: {languagesError}</p>}
+            <div className="row">
+              <label>
+                Video language
+                <select value={source} onChange={(e) => setSource(e.target.value)} required>
+                  <option value="">Choose…</option>
+                  {(languages ?? []).map((l) => (
+                    <option key={l.code} value={l.code}>
+                      {l.name}
+                      {dictionaryNote(l)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Dub language
+                <select value={target} onChange={(e) => setTarget(e.target.value)} required>
+                  <option value="">Choose…</option>
+                  {(languages ?? [])
+                    .filter((l) => l.dub && l.code !== source)
+                    .map((l) => (
+                      <option key={l.code} value={l.code}>
+                        {l.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label>
+                Speaker
+                <select value={speaker} onChange={(e) => setSpeaker(e.target.value)}>
+                  <option value="">Not set</option>
+                  <option value="man">A man</option>
+                  <option value="woman">A woman</option>
+                </select>
+                <span className="muted">only for the grammar of "I" in gendered languages</span>
+              </label>
+            </div>
+          </fieldset>
+        )}
         <div className="row">
           <label className="check">
             <input type="checkbox" checked={noReview} onChange={(e) => setNoReview(e.target.checked)} />

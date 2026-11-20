@@ -43,8 +43,27 @@ pub enum Event {
         waiting_for: Option<WaitingFor>,
         error: Option<String>,
     },
+    /// `localdub languages`: every language the engine knows.
+    Languages { languages: Vec<Language> },
     #[serde(other)]
     Other,
+}
+
+/// A language in the engine's table (src/localdub/languages.py), as `localdub languages` lists it.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct Language {
+    /// ISO 639-1, "bg".
+    pub code: String,
+    /// In English, "Bulgarian".
+    pub name: String,
+    /// Can a channel be dubbed into it? (Does the voice model speak it?)
+    pub dub: bool,
+    /// Its spelling dictionary ("bg_BG"), and whether it is installed; any language with one can
+    /// be a channel's video language.
+    pub dictionary: Option<String>,
+    pub dictionary_installed: bool,
+    /// The Debian package with the dictionary.
+    pub apt: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Deserialize)]
@@ -240,5 +259,20 @@ mod tests {
         assert_eq!(parse_line("Loading weights: 100%"), None);
         assert_eq!(parse_line(r#"{"no_event_field": 1}"#), None);
         assert_eq!(parse_line(""), None);
+    }
+
+    #[test]
+    fn the_languages_list() {
+        let line = r#"{"event": "languages", "languages": [
+            {"code": "en", "name": "English", "dub": true, "dictionary": "en_US", "dictionary_installed": true, "apt": "hunspell-en-us"},
+            {"code": "bg", "name": "Bulgarian", "dub": false, "dictionary": "bg_BG", "dictionary_installed": false, "apt": "hunspell-bg"}]}"#;
+
+        let Some(Event::Languages { languages }) = parse_line(line) else {
+            panic!("not the languages: {line}")
+        };
+
+        assert_eq!(languages.len(), 2);
+        assert!(languages[0].dub && !languages[1].dub);
+        assert_eq!(languages[1].apt.as_deref(), Some("hunspell-bg"));
     }
 }
