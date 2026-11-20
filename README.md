@@ -126,8 +126,11 @@ Built and run on a Proxmox LXC with 2× RTX 5060 Ti 16 GB; a 30-minute video tak
   the models localdub uses: Gemma 4 31B (text and vision) and Qwen3-TTS on llama.cpp, Nemotron 3.5
   Transcribe on `nemo-speech serve`, and Demucs through the small wrapper in `deploy/gpu/`. llama-swap
   starts and stops them as requests need them. See [deploy/gpu/README.md](deploy/gpu/README.md).
-- Where localdub runs: Python ≥ 3.10, **ffmpeg** with libass, **hunspell** with the source language's
-  dictionary, **DejaVu Sans**; for picking the voice by likeness also `transformers` (`.[voice]`, CPU).
+- Where localdub runs: Python ≥ 3.10, **ffmpeg** with libass, **hunspell** with the dictionary of each
+  channel's video language (`localdub languages --apt de` names the Debian packages; `deploy/install.sh`
+  installs the ones its channels need, plus `LANGS="de fr"` for new ones; a run without its dictionary
+  stops before any GPU work and says what to install), **DejaVu Sans**; for picking the voice by
+  likeness also `transformers` (`.[voice]`, CPU).
 
 Settings: create `~/dub/settings.json` with just the keys that differ from `src/localdub/settings.py`,
 e.g. `{"llm_url": "http://gpu-box:9876", "translate_effort": "low"}`. The API key comes from
@@ -213,7 +216,7 @@ The end-to-end tests run the real pipeline against stand-ins (`tests/fakes/`): a
 (chat, vision, TTS, transcription; separation goes on to the real `deploy/gpu/demucs_server.py`
 running a fake Demucs), plus a fake `nemo-speech` for the local backend, on a generated video with
 made-up Bulgarian sentences. One run uses the server for everything, the other the local backends.
-They need ffmpeg, hunspell-bg and DejaVu fonts, nothing else.
+They need ffmpeg, hunspell with the Bulgarian dictionary (`hunspell-bg`) and DejaVu fonts, nothing else.
 
 ## License
 

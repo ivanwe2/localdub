@@ -127,12 +127,13 @@ class Speller:
 
     def unknown(self, words) -> set[str]:
         words = sorted({w for w in words if w})
-        if not words:
+        if not words or not self.dict_name:  # no dictionary for the language: nothing counts as misspelled
             return set()
         p = subprocess.run(["hunspell", "-d", self.dict_name, "-p", self.personal.name, "-i", "utf-8", "-l"],
                            input="\n".join(words), capture_output=True, text=True)
         if p.returncode != 0:
-            raise RuntimeError(f"hunspell failed: {p.stderr.strip()} (apt-get install hunspell hunspell-bg?)")
+            raise RuntimeError(f"hunspell failed with the {self.dict_name} dictionary: {p.stderr.strip()} "
+                               "(localdub languages says which package has it)")
         return set(p.stdout.split())
 
     @staticmethod
@@ -182,11 +183,13 @@ def spellcheck(segs, server, settings, profile) -> dict:
                 report[s["id"]]["learned"].append((w["word"], new))
                 w["word"] = new
 
-    # 2. LLM proposals, accepted only for words the dictionary rejects
+    # 2. LLM proposals, accepted only for words the dictionary rejects (so none without a dictionary)
     unknown = speller.unknown(core(w["word"]) for s in segs for w in s["words"])
     by_id = {s["id"]: s for s in segs}
     lang = profile["source_language_name"]
-    for start in range(0, len(segs), 40):
+    if not profile["hunspell_dict"]:
+        print(f"   {lang} has no spelling dictionary: spelling fixes skipped", file=sys.stderr, flush=True)
+    for start in range(0, len(segs), 40) if profile["hunspell_dict"] else ():
         chunk = segs[start:start + 40]
         user = "\n".join(f"{s['id']}: {text_of(s['words'])}" for s in chunk)
         if names:

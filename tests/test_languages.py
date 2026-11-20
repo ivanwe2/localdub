@@ -148,3 +148,48 @@ def test_caption_chunks_keep_abbreviations_of_any_language_whole():
     assert _chunks(["ул.", "Шипка"]) == [[0, 1]]
     assert _chunks(["Sra.", "López"]) == [[0, 1]]
     assert _chunks(["Go.", "Now."]) == [[0], [1]]
+
+
+def test_a_run_without_its_dictionary_stops_before_any_gpu_work(home, monkeypatch, capsys):
+    from localdub import run as run_module
+    monkeypatch.setattr(run_module, "dictionary_installed", lambda name: name != "de_DE")
+    video = home / "talk.mp4"
+    video.write_bytes(b"not decoded before the check")
+
+    rc = run_module.main(["run", str(video), "--channel", "market", "--from", "de", "--to", "en", "--name", "talk"])
+
+    assert rc == 1
+    assert "German spelling dictionary (de_DE) isn't installed: apt-get install hunspell-de-de" in capsys.readouterr().err
+    assert not (home / "runs" / "talk" / "state.json").exists(), "no run was made"
+
+
+def test_a_language_without_a_dictionary_skips_spelling_fixes():
+    from localdub.text import Speller, spellcheck
+
+    class NoCalls:
+        def chat_json(self, *args, **kwargs):
+            raise AssertionError("no spelling request without a dictionary")
+
+    profile = {"names": {}, "accepted_words": [], "corrections": {"Wellt": "Welt"}, "hunspell_dict": "",
+               "source_language_name": "Klingon", "source_lang": "tlh"}
+    segs = [{"id": 1, "words": [{"word": "Hallo"}, {"word": "Wellt."}]}]
+
+    report = spellcheck(segs, NoCalls(), DEFAULT_SETTINGS, profile)
+
+    assert Speller("", []).unknown(["anything"]) == set()
+    assert segs[0]["src"] == "Hallo Welt." and report[1]["learned"] == [("Wellt.", "Welt.")], "learned fixes still apply"
+    assert report[1]["unknown"] == [] and report[1]["fixes"] == []
+
+
+def test_check_looks_at_every_channels_dictionary(home, monkeypatch, capsys):
+    from localdub import run as run_module
+    run_module.channel_profile("market", flags("de", "es"), DEFAULT_SETTINGS)
+    run_module.channel_profile("kanal", flags("de", "en"), DEFAULT_SETTINGS)
+    monkeypatch.setattr(run_module, "dictionary_installed", lambda name: False)
+
+    run_module.main(["check", "--json"])
+
+    checks = {e["what"]: e for e in events_of(capsys) if e.get("event") == "check"}
+    dictionary = checks["hunspell de_DE dictionary (channel kanal, market)"]
+    assert dictionary["ok"] is False and dictionary["hint"] == "apt-get install hunspell-de-de"
+    assert not any("bg_BG" in what for what in checks), "no fixed Bulgarian check any more"
