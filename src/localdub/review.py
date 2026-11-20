@@ -26,11 +26,17 @@ def status(path: Path) -> str:
     return "pending"
 
 
-def write_transcript_review(path: Path, segs: list[dict], report: dict, voice: dict | None) -> int:
+def label(code: str) -> str:
+    """How a language's lines are marked in the review files: its code in capitals, e.g. "BG", "EN"."""
+    return code.upper()
+
+
+def write_transcript_review(path: Path, segs: list[dict], report: dict, voice: dict | None, src: str) -> int:
+    """Review 1: the doubtful lines of the transcript, marked with the source language's code."""
     lines = [
         "status: pending",
         "# Review 1 of 2: the transcript.",
-        "# Fix spelling in the BG lines below; keep the [id] lines as they are. Only lines with automatic",
+        f"# Fix spelling in the {label(src)} lines below; keep the [id] lines as they are. Only lines with automatic",
         "# fixes, name suggestions or words the dictionary doesn't know are listed; the rest looked clean",
         "# (fixes this channel already learned from you are applied without asking).",
         "# Unknown words you leave unchanged are remembered as correct for this channel.",
@@ -84,37 +90,42 @@ def write_transcript_review(path: Path, segs: list[dict], report: dict, voice: d
         if not (r.get("fixes") or r.get("review") or r.get("unknown")):
             continue
         count += 1
-        lines += [f"[{s['id']}] {mmss(s['start'])}   " + "   ".join(notes), f"BG: {s['bg']}", ""]
+        lines += [f"[{s['id']}] {mmss(s['start'])}   " + "   ".join(notes), f"{label(src)}: {s['src']}", ""]
     if count == 0:
         lines.insert(8, "# Nothing to check: every word is known and nothing was changed automatically.")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return count
 
 
-def write_translation_review(path: Path, segs: list[dict]) -> None:
+def write_translation_review(path: Path, segs: list[dict], src: str, tgt: str) -> None:
+    """Review 2: every line, its source text and its translation, marked with the two languages' codes."""
+    s_label, t_label = label(src), label(tgt)
     lines = [
         "status: pending",
         "# Review 2 of 2: the translation.",
-        "# Edit the EN lines; keep the [id] and BG lines. Every approved line is remembered for this channel and",
-        "# shown to the translator as an example in future videos, so your fixes carry over.",
-        "# Terms the translator should always use go under 'glossary:', one per line, e.g. хлебарки = cockroaches",
+        f"# Edit the {t_label} lines; keep the [id] and {s_label} lines. Every approved line is remembered for this",
+        "# channel and shown to the translator as an example in future videos, so your fixes carry over.",
+        "# Terms the translator should always use go under 'glossary:', one per line, as",
+        f"# {s_label} term = {t_label} term",
         "# When done: change the first line to 'status: approved', save, and rerun the same command.",
         "",
         "glossary:",
         "",
     ]
     for s in segs:
-        n = len(s["en"])
+        n = len(s["tgt"])
         mark = "   OVER" if n > s["budget"] else ""
         flags = f"   [{'; '.join(s['flags'])}]" if s.get("flags") else ""
         lines += [f"[{s['id']}] {mmss(s['start'])}   slot {s['slot']:.1f}s   {n}/{s['budget']} chars{mark}{flags}",
-                  f"BG: {s['bg']}", f"EN: {s['en']}", ""]
+                  f"{s_label}: {s['src']}", f"{t_label}: {s['tgt']}", ""]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def parse(path: Path) -> dict:
-    """{'status', 'voice', 'glossary': {src: tgt}, 'bg': {id: text}, 'en': {id: text}}"""
-    out = {"status": "pending", "voice": None, "glossary": {}, "bg": {}, "en": {}}
+def parse(path: Path, src: str, tgt: str) -> dict:
+    """{'status', 'voice', 'glossary': {source term: dub term}, 'src': {id: text}, 'tgt': {id: text}}, with
+    the lines found by their language codes (`src`, `tgt`, e.g. "bg" and "en")."""
+    out = {"status": "pending", "voice": None, "glossary": {}, "src": {}, "tgt": {}}
+    labels = {label(src): "src", label(tgt): "tgt"}
     current = None
     in_glossary = False
     for raw in _read(path):
@@ -141,8 +152,7 @@ def parse(path: Path) -> dict:
             if a.strip() and b.strip():
                 out["glossary"][a.strip()] = b.strip()
             continue
-        if current is not None and line.upper().startswith("BG:"):
-            out["bg"][current] = line[3:].strip()
-        elif current is not None and line.upper().startswith("EN:"):
-            out["en"][current] = line[3:].strip()
+        name, colon, text = line.partition(":")
+        if current is not None and colon and name.strip().upper() in labels:
+            out[labels[name.strip().upper()]][current] = text.strip()
     return out

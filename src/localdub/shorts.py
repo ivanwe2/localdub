@@ -140,7 +140,7 @@ def span(s: dict, lang: str) -> tuple[float, float]:
 
 
 def text(s: dict, lang: str) -> str:
-    return (s.get("bg", "") if lang == "original" else s.get("en", "")).strip()
+    return (s.get("src", "") if lang == "original" else s.get("tgt", "")).strip()
 
 
 def timeline(segs: list[dict], vision: dict, mot: dict, lang: str) -> str:
