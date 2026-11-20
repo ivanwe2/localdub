@@ -210,25 +210,60 @@ impl Download {
     }
 }
 
-/// A link yt-dlp may be given: http(s), one piece (no spaces), not too long. It always comes after
-/// `--` too, so it can never pass for an option.
+/// A link yt-dlp may be given: http(s), one piece (no spaces), not too long, to a site on the
+/// internet. It always comes after `--` too, so it can never pass for an option.
+///
+/// The server must not become a way to reach this machine or the local network (llama-swap, the
+/// Proxmox host…), so links to local names and IP addresses are refused here: localhost, names
+/// without a dot or under .local/.lan/.internal/.home.arpa, and any address written as numbers
+/// (`127.0.0.1`, `127.1`, `0x7f.1`, `[::1]`: a real top-level domain starts with a letter).
+/// The second guard is in `args`: yt-dlp only takes links of the sites it knows.
 pub fn check_url(url: &str) -> Result<(), String> {
-    let rest = url
+    let Some(rest) = url
         .strip_prefix("https://")
-        .or_else(|| url.strip_prefix("http://"));
-    if rest.is_none_or(str::is_empty) {
+        .or_else(|| url.strip_prefix("http://"))
+        .filter(|rest| !rest.is_empty())
+    else {
         return Err("a link to the video, starting with https://".to_string());
-    }
+    };
     if url.len() > 2048 {
         return Err("that link is too long (at most 2048 characters)".to_string());
     }
     if url.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err("a link has no spaces in it".to_string());
     }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.contains('@') {
+        return Err("a link without a user name or password in it".to_string());
+    }
+    let host = match authority.rsplit_once(':') {
+        Some((host, port)) if port.bytes().all(|b| b.is_ascii_digit()) => host,
+        _ => authority,
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let top = host.rsplit('.').next().unwrap_or("");
+    let local_name = [
+        "localhost",
+        "local",
+        "lan",
+        "internal",
+        "home.arpa",
+        "localdomain",
+    ]
+    .iter()
+    .any(|name| host == *name || host.ends_with(&format!(".{name}")));
+    if !host.contains('.') || local_name || !top.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        return Err(format!(
+            "{host:?}: only links to video sites on the internet, not to this machine or the local network"
+        ));
+    }
     Ok(())
 }
 
 /// yt-dlp's arguments for downloading `url` into the videos folder `dir`:
+/// - only links of the sites yt-dlp knows (YouTube, Vimeo…): without its generic extractor it
+///   refuses any other link before fetching anything ("No suitable extractor"), so a name that
+///   leads into the local network gets nowhere either; direct links to video files don't work then;
 /// - one video, even from a link into a playlist;
 /// - the best picture up to 1080p, preferably H.264 with AAC sound (plays everywhere), as mp4;
 ///   picture and sound as separate files where the site has them (YouTube refuses its old
@@ -242,6 +277,8 @@ pub fn args(dir: &Path, url: &str) -> Vec<String> {
     let dir = dir.to_string_lossy().into_owned();
     let partial = format!("temp:{dir}/.partial");
     [
+        "--use-extractors",
+        "default,-generic",
         "--newline",
         "--no-playlist",
         "--playlist-items",
@@ -446,6 +483,8 @@ mod tests {
             Ok(())
         );
         assert_eq!(check_url("http://example.com/v.mp4"), Ok(()));
+        assert_eq!(check_url("https://youtu.be/dQw4w9WgXcQ?t=42"), Ok(()));
+        assert_eq!(check_url("https://Vimeo.COM:443/123#x"), Ok(()));
         let long = format!("https://example.com/{}", "a".repeat(2050));
         for bad in [
             "",
@@ -460,6 +499,40 @@ mod tests {
         ] {
             assert!(check_url(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn links_into_this_machine_or_the_local_network_are_refused() {
+        for local in [
+            "http://localhost:9876/running",
+            "http://LOCALHOST./x",
+            "http://api.localhost/x",
+            "http://127.0.0.1:9876/v1/models",
+            "http://127.1/x",
+            "http://0x7f.1/x",
+            "http://2130706433/x",
+            "http://192.168.0.27:8006/",
+            "http://10.0.0.1/x",
+            "http://[::1]:8080/x",
+            "http://[fd00::1]/x",
+            "http://llama-cpp:8080/x",
+            "http://nas.local/x",
+            "http://router.lan/x",
+            "http://box.home.arpa/x",
+            "http://metadata.google.internal/x",
+            "https://www.youtube.com@127.0.0.1/watch",
+            "https://user:pass@example.com/v",
+        ] {
+            let refused = check_url(local);
+            assert!(refused.is_err(), "{local}");
+        }
+    }
+
+    #[test]
+    fn yt_dlp_only_takes_links_of_sites_it_knows() {
+        let args = args(Path::new("/root/dub/videos"), "https://example.com/v");
+
+        assert_eq!(args[..2], ["--use-extractors", "default,-generic"]);
     }
 
     #[test]

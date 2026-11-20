@@ -166,6 +166,8 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
   LOCALDUB_LISTEN says otherwise, answers only to its own Host names (DNS-rebinding guard; more via
   LOCALDUB_ALLOWED_HOSTS) and refuses state changes whose Origin is another site or whose
   Sec-Fetch-Site is cross-site (CSRF; the Vite dev proxy rewrites Host and Origin). Videos must be
-  inside the home folder. Download links must be one http(s) piece and go after `--`; yt-dlp can
-  still fetch any address the box reaches (LAN included), fine while only the tunnel reaches the
-  page. Before opening it to the LAN: token auth.
+  inside the home folder. Download links (SSRF guard, Nov 20): one http(s) piece, after `--`; no
+  localhost, IP literals in any form, dotless names, .local/.lan/.internal/.home.arpa or userinfo
+  (`download::check_url`); and yt-dlp runs with `--use-extractors default,-generic`, so only links
+  of sites it knows are fetched (verified: internal links get "No suitable extractor" before any
+  request). Before opening it to the LAN: token auth.

@@ -197,7 +197,8 @@ yt-dlp on every run: sites change and an old yt-dlp stops working. Extra yt-dlp 
 proxy) can go into `/etc/yt-dlp.conf`. Download only videos you have the rights to dub.
 
 In the page you upload a video, download one from a link (YouTube and the other sites yt-dlp
-knows; it lands in the videos folder as `yt-<id>-<title>.mp4`, up to 1080p, and runs beside a dub),
+knows; it lands in the videos folder as `yt-<id>-<title>.mp4`, up to 1080p, and runs beside a dub;
+links to other pages or files, and into the machine or the local network, are refused),
 or give a path inside the home folder; then start a run, follow it live, do the reviews (edit the
 text, *Approve and continue*), make and pick Shorts (tick them, *Render*), and watch or download the
 results.
