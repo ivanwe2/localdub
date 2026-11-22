@@ -17,11 +17,16 @@ pub struct StartRequest {
     /// Skip both reviews; nothing is learned from the run.
     #[serde(default)]
     pub no_review: bool,
-    /// When the dub is done, also make the top N Shorts in both languages (0 = none).
+    /// When the dub is done, also make the top N Shorts in both languages (0 = none). With
+    /// `shorts_only`: render the top N Shorts (0 = wait for a pick).
     #[serde(default)]
     pub shorts: u32,
+    /// No dub: the transcript, then Shorts in the video's language.
+    #[serde(default)]
+    pub shorts_only: bool,
     /// A new channel's languages: the video's and the dub's, as codes ("bg", "en"). Required for a
-    /// channel that doesn't exist yet; for an existing one the engine checks they match.
+    /// channel that doesn't exist yet (only the video's for Shorts only); for an existing one the
+    /// engine checks they match.
     pub source: Option<String>,
     pub target: Option<String>,
     /// Optional for a new channel: "man" or "woman", for the translation's grammar.
@@ -68,10 +73,17 @@ impl StartRequest {
             .join("channels")
             .join(&self.channel)
             .join("profile.json");
-        if !profile.is_file() && (self.source.is_none() || self.target.is_none()) {
+        if !profile.is_file()
+            && (self.source.is_none() || (self.target.is_none() && !self.shorts_only))
+        {
             return Err(format!(
-                "channel {:?} is new: choose the video's language and the dub's",
-                self.channel
+                "channel {:?} is new: choose the video's language{}",
+                self.channel,
+                if self.shorts_only {
+                    ""
+                } else {
+                    " and the dub's"
+                }
             ));
         }
         Ok(())
@@ -140,7 +152,8 @@ pub fn is_inside(path: &Path, folder: &Path) -> bool {
 
 /// The engine's arguments for a new run, without the program itself and without `--json`
 /// (run_engine adds that):
-/// `run <video> --channel <channel> --name <name>`, then `--no-review` and `--shorts N` if asked for.
+/// `run <video> --channel <channel> --name <name>`, then `--shorts-only`, `--no-review` and
+/// `--shorts N` if asked for.
 pub fn engine_args(req: &StartRequest) -> Vec<String> {
     // `req` is only borrowed, so its Strings are copied (clone) into the list we hand back.
     let mut args = vec![
@@ -151,6 +164,9 @@ pub fn engine_args(req: &StartRequest) -> Vec<String> {
         "--name".to_string(),
         req.name.clone(),
     ];
+    if req.shorts_only {
+        args.push("--shorts-only".to_string());
+    }
     if req.no_review {
         args.push("--no-review".to_string());
     }
@@ -222,6 +238,7 @@ mod tests {
             name: "market".into(),
             no_review,
             shorts,
+            shorts_only: false,
             source: None,
             target: None,
             speaker: None,
@@ -306,6 +323,7 @@ mod tests {
             name: name.into(),
             no_review: false,
             shorts: 0,
+            shorts_only: false,
             source: Some("bg".into()),
             target: Some("en".into()),
             speaker: None,
@@ -432,6 +450,27 @@ mod tests {
                 .contains("is new: choose the video's language")
         );
         assert_eq!(req.validate(home.path()), Ok(()));
+    }
+
+    #[test]
+    fn shorts_only_needs_only_the_video_language() {
+        let (home, video) = home_with_video();
+        let mut req = with("market", "clips", &video);
+        req.target = None;
+        req.shorts_only = true;
+        req.shorts = 2;
+
+        assert_eq!(req.validate(home.path()), Ok(()));
+        assert_eq!(
+            engine_args(&req)[6..],
+            ["--shorts-only", "--shorts", "2", "--from", "bg"]
+        );
+        req.source = None;
+        assert!(
+            req.validate(home.path())
+                .unwrap_err()
+                .ends_with("is new: choose the video's language")
+        );
     }
 
     #[test]
