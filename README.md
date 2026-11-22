@@ -53,8 +53,8 @@ minutes.
 - **It learns your channel.** Spelling fixes, names, a glossary and every approved line feed the next
   video, so the second video needs fewer fixes than the first.
 - **Shorts on the side.** A vision model watches the video, then the strongest 25-60 s stretches are
-  proposed: they stand alone, hook early and end on a payoff. Rendered 9:16 with big captions, in the
-  dub or the original language. Or skip the dub: *Shorts only* turns a video straight into Shorts.
+  proposed: they stand alone, hook early and end on a payoff. Rendered 9:16 with big captions timed
+  word by word as they're spoken, in the dub or the original language. Or skip the dub: *Shorts only* turns a video straight into Shorts.
 - **Your models, your choice.** Every task (text, vision, voice, hearing, separation) can use any model
   on any server, your GPU box or an OpenAI-compatible API, picked and tried on the Models screen.
 - **Yours to automate.** One command-line tool with JSON events and plain exit codes, so a person, a
@@ -244,8 +244,9 @@ From a finished run: ffmpeg measures shot cuts and movement; Gemma looks at the 
 with what's on screen and proposes 6 candidates of 25-60 s that stand alone, hook early and end on a
 payoff, strongest first. Mark the ones you want in `shorts/<lang>/candidates.txt` (or `--auto N`, or
 tick them in the page). Each Short is 1080x1920: the full frame over a blurred copy of itself, the
-title on top and big burned-in captions. `--lang original` cuts from the original audio with captions
-timed by the real word timestamps, in whatever language the channel speaks.
+title on top and big burned-in captions, timed by when each word is spoken: `--lang original` cuts
+from the original audio with the transcript's word times; the dub's captions use the times the take
+check heard each word (takes voiced before 0.16.0 share each line's length by characters).
 
 **Shorts only** (`--shorts-only`, or *Shorts only* in the page): no translation, no voice. The run
 separates, transcribes and spell-checks (one review, the transcript, which becomes the captions; or

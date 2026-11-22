@@ -31,6 +31,7 @@ import numpy as np
 
 from . import languages, media
 from .llm import LLMError
+from .voice import script_times
 
 VISION_PROMPT = """These are {n} frames from a video, at {times} (left to right, then top to bottom).
 For each frame write one short line on what is shown: the place, people, what they are doing, notable
@@ -268,7 +269,9 @@ def _chunks(words: list[str], max_chars: int = 18) -> list[list[int]]:
     return out + ([cur] if cur else [])
 
 
-def captions(segs: list[dict], offset: float, length: float, title: str, lang: str) -> str:
+def captions(segs: list[dict], offset: float, length: float, title: str, lang: str, code: str = "en") -> str:
+    """The Short's captions (ASS): the original's words at their real times; the dub's at the times the take
+    check heard them (`code`: the dub's language), or shared by length for takes checked before 0.16.0."""
     head = [
         "[Script Info]", "ScriptType: v4.00+", "PlayResX: 1080", "PlayResY: 1920", "WrapStyle: 0",
         "ScaledBorderAndShadow: yes", "",
@@ -297,11 +300,18 @@ def captions(segs: list[dict], offset: float, length: float, title: str, lang: s
                 end = ws[nxt[0]]["start"] if nxt else ws[g[-1]]["end"] + 0.3
                 add(ws[g[0]]["start"], end, [ws[i]["word"] for i in g])
             continue
-        words = text(s, lang).split()  # the dub: no word times, so share the take's length by characters
+        words = text(s, lang).split()
         if not words or not s.get("take"):
             continue
         a = span(s, lang)[0]
         dur = float(s["take"]["seconds"])
+        if s["take"].get("words"):  # the script's words, timed by what the check heard
+            ws = script_times(text(s, lang), s["take"]["words"], code, dur)
+            groups = _chunks([w["word"] for w in ws])
+            for g, nxt in zip(groups, groups[1:] + [None]):
+                end = ws[nxt[0]]["start"] if nxt else ws[g[-1]]["end"] + 0.3
+                add(a + ws[g[0]]["start"], a + end, [ws[i]["word"] for i in g])
+            continue
         groups = [[words[i] for i in g] for g in _chunks(words)]
         total = sum(len(" ".join(g)) + 1 for g in groups)
         t = a
@@ -317,7 +327,8 @@ def captions(segs: list[dict], offset: float, length: float, title: str, lang: s
     return "\n".join(head + ev) + "\n"
 
 
-def render(video: Path, segs: list[dict], pick: dict, out: Path, work: Path, show_title: bool, lang: str) -> Path:
+def render(video: Path, segs: list[dict], pick: dict, out: Path, work: Path, show_title: bool, lang: str,
+           code: str = "en") -> Path:
     order = [s["id"] for s in segs]
     by_id = {s["id"]: s for s in segs}
     if pick["start"] not in by_id or pick["end"] not in by_id or order.index(pick["start"]) > order.index(pick["end"]):
@@ -327,7 +338,7 @@ def render(video: Path, segs: list[dict], pick: dict, out: Path, work: Path, sho
     end = span(part[-1], lang)[1] + 0.6
     length = end - start
     ass = work / f"short-{pick['n']}.ass"
-    ass.write_text(captions(part, start, length, pick["title"] if show_title else "", lang), encoding="utf-8")
+    ass.write_text(captions(part, start, length, pick["title"] if show_title else "", lang, code), encoding="utf-8")
     graph = ("[0:v]split[a][b];"
              "[a]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=24:2,"
              "eq=brightness=-0.07[bg];"

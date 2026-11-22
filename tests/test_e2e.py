@@ -72,6 +72,7 @@ def test_automatic_run_with_shorts(fake_env, capsys):
     assert ev[-1]["line"]["tgt"] == new and ev[-1]["line"]["fixed"] and ev[-1]["shorts"]["dub"] == [str(short)]
     fixed = next(s for s in json.loads((run / "segments.json").read_text()) if s["id"] == line)
     assert fixed["tgt"] == new and fixed["take"]["ok"] and fixed["fixed"]
+    assert [w["word"] for w in fixed["take"]["words"]] == new.split()  # each word heard, and when: for captions
     assert short.stat().st_mtime_ns > rendered and (run / "auto.en.mp4").stat().st_mtime_ns > mixed
     memory = (fake_env["home"] / "channels" / "auto" / "memory.jsonl").read_text(encoding="utf-8")
     assert new in memory  # the channel learns from a fix, as from review 2
