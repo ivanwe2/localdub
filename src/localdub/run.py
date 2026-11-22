@@ -29,7 +29,7 @@ import numpy as np
 
 from . import events, languages, media, review
 from .segments import upgrade, upgrade_all
-from .llm import LLMError, Server
+from .llm import LLMError, Models
 from .mix import mix, mux, place, subtitles
 from .settings import Profile, home, load_settings
 from .text import (Speller, _is_name, build_segments, core, replace_words, shorten_to, spellcheck, text_of,
@@ -137,7 +137,7 @@ def local(ctx: Ctx, tool: str) -> bool:
 def stage_separate(run: Run, ctx: Ctx):
     if not local(ctx, "demucs"):
         log(f"   {ctx.settings['separation_model']} on the model server (roughly 1 minute per 10 minutes of video)")
-        ctx.server.separate(ctx.settings["separation_model"], run.p("audio44.wav"), run.p("vocals.wav"),
+        ctx.server.separate(run.p("audio44.wav"), run.p("vocals.wav"),
                             run.p("music.wav"))
         return
     ctx.server.unload_all()
@@ -336,7 +336,7 @@ def clone_tests(run: Run, ctx: Ctx, sample: Path, lines: list[str]) -> list[str]
         if not trim.exists():
             sample_b64 = sample_b64 or base64.b64encode(sample.read_bytes()).decode()
             raw = trim.with_suffix(".raw.wav")
-            raw.write_bytes(ctx.server.tts(ctx.settings["tts_model"], line, lang, sample_b64, 42,
+            raw.write_bytes(ctx.server.tts(line, lang, sample_b64, 42,
                                            label=f"test sentence {i} from {sample.stem}"))
             media.trim_silence(raw, trim, RATE)
             raw.unlink()
@@ -566,7 +566,7 @@ def stage_voice(run: Run, ctx: Ctx):
         if s.get("shortened_from"):
             s["tgt"] = s.pop("shortened_from")
     if local(ctx, "nemo"):  # the voice clone stays on the server (GPU 0), the check runs here (GPU 1)
-        ctx.server.unload_all(keep=ctx.settings["tts_model"])
+        ctx.server.unload_all(keep_task="voice")
         log(f"   {ctx.settings['tts_model']} on the model server, checking each take with Nemotron on "
             f"{ctx.settings['nemo']['check_device']}")
     else:  # llama-swap runs both side by side (its "voicing" group)
@@ -594,7 +594,7 @@ def stage_voice(run: Run, ctx: Ctx):
         if changed:
             log(f"   re-voicing {len(changed)} shortened lines")
             if local(ctx, "nemo"):  # shortening loaded the text model again
-                ctx.server.unload_all(keep=ctx.settings["tts_model"])
+                ctx.server.unload_all(keep_task="voice")
             redo = {s["id"] for s in changed}
             report = sorted([r for r in report if r["id"] not in redo] +
                             voice_all(changed, run.dir, ctx.server, ctx.settings, ctx.profile, lang, embedder, vp),
@@ -789,7 +789,7 @@ def cmd_run(args) -> int:
     profile = checked
     if not {"spelling", "review1"} <= set(st["done"]) and (missing := missing_dictionary(profile)):
         return fail(missing)  # the spelling stages need it: say so now, not after the GPU work
-    ctx = Ctx(settings, profile, Server(settings), args.no_review, f"localdub run {run.name}")
+    ctx = Ctx(settings, profile, Models(settings), args.no_review, f"localdub run {run.name}")
     log(f"localdub: run '{run.name}' (channel '{st['channel']}') in {run.dir}")
     shorts_after = ["original"] if shorts_only else list(SHORTS_LANGS) if args.shorts else []
     events.emit("start", command="run", run=run.name, channel=st["channel"], dir=str(run.dir),
@@ -849,6 +849,102 @@ def cmd_run(args) -> int:
     return 0
 
 
+def check_models(settings: dict, used: list[str], line) -> None:
+    """`check`'s lines for the model servers: each one the `used` tasks are on answers (llama-swap's
+    key is there), and lists the task's model. A voice or separation server of the openai kind is the
+    tool's own server, which lists nothing: that it answers is enough."""
+    from . import models
+    ai = Models(settings)
+    configs = models.servers(settings)
+    by_server: dict[str, list[str]] = {}
+    for t in used:
+        by_server.setdefault(ai.tasks[t]["server"], []).append(t)
+    for name, tasks in by_server.items():
+        if name not in ai.servers:
+            line(False, f"server '{name}' for {', '.join(tasks)}", "add it: localdub models --server NAME --url URL")
+            continue
+        server, cfg = ai.servers[name], configs[name]
+        if server.kind == "llama-swap" and cfg.get("key_env"):
+            line(bool(server.key), f"API key of '{name}' (${cfg['key_env']} or {cfg.get('key_file')})",
+                 "set it in the environment or in that file, or: localdub models --server NAME --key-stdin")
+        where = f"model server '{name}' ({server.kind}) at {server.url}"
+        if models.is_remote(server.url):
+            log(f"  note  '{name}' is off this network: frames, transcripts and voice samples are sent there")
+        try:
+            listed = server.models(timeout=10)
+        except LLMError as e:
+            answered = ": HTTP " in str(e)  # it's there, it just doesn't list models
+            line(answered and all(t in ("voice", "separation") for t in tasks), where, str(e))
+            continue
+        line(True, where)
+        for t in tasks:
+            m = ai.model(t)
+            direct = server.kind == "openai" and t in ("voice", "separation")
+            hint = ("add it to the llama-swap config (see deploy/gpu/llama-swap.yaml)" if server.kind == "llama-swap"
+                    else f"it lists: {', '.join(listed[:8]) or 'nothing'}")
+            line(direct or m in listed, f"{t}: model {m}", hint)
+
+
+def cmd_models(args) -> int:
+    """`localdub models`: which model does each task, on which server; change them; try one."""
+    from . import models as m
+    settings = load_settings()
+    if args.server:
+        name = args.server
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,31}", name):
+            return fail(f"server name {name!r}: letters, digits, '.', '_' and '-', at most 32")
+        if args.remove:
+            if why := m.remove_server(name, settings):
+                return fail(why)
+            log(f"localdub: removed the server '{name}'")
+        else:
+            if args.url is None and name not in m.servers(settings):
+                return fail(f"server '{name}' is new: give its --url")
+            if args.url is not None and not re.fullmatch(r"https?://[^\s]+", args.url):
+                return fail(f"--url {args.url!r}: an http:// or https:// address")
+            if args.url is not None or args.kind:
+                m.save_server(name, args.url, args.kind)
+            if args.key_stdin:
+                m.store_key(name, sys.stdin.readline().strip())  # stdin, so the key is in no command line
+            log(f"localdub: server '{name}' saved")
+        settings = load_settings()
+    for item in args.set or []:
+        task, _, rest = item.partition("=")
+        server, _, model = rest.partition("/")  # a model's name may have more slashes (org/model)
+        if task not in m.TASKS or not server or not model:
+            return fail(f"--set {item!r}: TASK=SERVER/MODEL, e.g. text=main/gemma4-31b (tasks: {', '.join(m.TASKS)})")
+        if server not in m.servers(settings):
+            return fail(f"--set {item!r}: there's no server '{server}' (add it with --server {server} --url ...)")
+        m.save_task(task, server, model)
+        log(f"localdub: {task} is done by {model} on '{server}'")
+    for item in args.effort or []:
+        use, _, level = item.partition("=")
+        if use not in m.EFFORTS or level not in m.EFFORT_LEVELS:
+            return fail(f"--effort {item!r}: USE=LEVEL, uses {', '.join(m.EFFORTS)}, levels {', '.join(m.EFFORT_LEVELS)}")
+        m.save_effort(use, level)
+        log(f"localdub: {use} thinks at '{level}'")
+    settings = load_settings()
+    if args.test:
+        result = m.try_task(args.test, settings)
+        events.emit("models_test", **result)
+        speed = f", {result['tok_per_s']} tok/s" if result["tok_per_s"] else ""
+        log(f"  {'ok  ' if result['ok'] else 'FAIL'}  {args.test}: {result['model']} on '{result['server']}' "
+            f"({result['seconds']} s{speed}): {result['detail']}")
+        if not result["ok"]:
+            events.note(error=result["detail"])
+        return 0 if result["ok"] else 1
+    info = m.overview(settings)
+    events.emit("models", **info)
+    for s in info["servers"]:
+        state = f"{len(s['models'])} models" if s["models"] else ("answers" if s["reachable"] else f"not reachable: {s['error']}")
+        note = ", off this network" if s["remote"] else ""
+        log(f"server {s['name']} ({s['kind']}{note}) {s['url']}: {state}; key {'set' if s['key_set'] else 'none'}")
+    for t in info["tasks"]:
+        log(f"  {t['title']:<11} {t['model']} on '{t['server']}'" + ("" if t["listed"] else "  (its server doesn't list it)"))
+    log("thinking: " + ", ".join(f"{use} {level}" for use, level in info["efforts"].items()))
+    return 0
+
+
 def cmd_check(args) -> int:
     settings = load_settings()
     ok = True
@@ -876,14 +972,14 @@ def cmd_check(args) -> int:
     nemo, d = settings["nemo"], settings["demucs"]
     for tool, backend in (("nemo", nemo["backend"]), ("demucs", d["backend"])):
         line(backend in ("http", "local"), f"{tool}.backend: {backend}", 'use "http" (the model server) or "local"')
-    remote = [settings["text_model"], settings["vision_model"], settings["tts_model"]]
+    used = ["text", "vision", "voice"]  # the tasks done on a model server
     fix = "set the right path in ~/dub/settings.json (see README, Settings)"
     if nemo["backend"] == "local":
         line(Path(nemo["bin"]).exists() or shutil.which(nemo["bin"]) is not None, f"nemo-speech: {nemo['bin']}", fix)
         line(Path(nemo["model"]).exists(), f"Nemotron model: {nemo['model']}", fix)
         line(Path(nemo["config"]).exists(), f"Nemotron config: {nemo['config']}", fix)
     else:
-        remote.append(settings["asr_model"])
+        used.append("hearing")
     if d["backend"] == "local":
         try:
             out = media.run(d["python"], "-c", "import demucs, torch; print(torch.cuda.is_available())").strip()
@@ -891,10 +987,7 @@ def cmd_check(args) -> int:
         except (media.ToolError, OSError) as e:
             line(False, f"Demucs in {d['python']}", str(e).splitlines()[0])
     else:
-        remote.append(settings["separation_model"])
-    from .llm import api_key
-    line(bool(api_key(settings)), f"API key (${settings['api_key_env']} or {settings['api_key_file']})",
-         "set it in the environment or in that file")
+        used.append("separation")
     try:
         p = subprocess.run(["ffmpeg", "-hide_banner", "-filters"], capture_output=True, text=True)
         line(" ass " in p.stdout, "ffmpeg can burn in captions (libass)", "install an ffmpeg built with libass")
@@ -913,13 +1006,7 @@ def cmd_check(args) -> int:
             line(True, f"speaker fingerprints ({settings['speaker']['model']} on {settings['speaker']['device']})")
         except Exception as e:  # noqa: BLE001
             line(False, "speaker fingerprints", str(e)[:200])
-    try:
-        models = Server(settings).models()
-        line(True, f"model server (llama-swap) at {settings['llm_url']}")
-        for m in remote:
-            line(m in models, f"model {m}", "add it to the llama-swap config (see deploy/gpu/llama-swap.yaml)")
-    except LLMError as e:
-        line(False, f"model server (llama-swap) at {settings['llm_url']}", str(e))
+    check_models(settings, used, line)
     log("all good" if ok else "fix the FAIL lines above")
     if not ok:
         events.note(error="some checks failed")
@@ -944,7 +1031,7 @@ def make_shorts(run: Run, settings: dict, lang: str, auto: int = 0, redo: str | 
     segs = run.segs
     rerun = f"localdub shorts {run.name} --lang {lang}"
     if not cand_txt.exists():
-        server = Server(settings)
+        server = Models(settings)
         video, seconds = Path(run.state["video"]), run.state["seconds"]
         try:
             log(f"\n== Shorts in {language} ({lang}) from '{run.name}'")
@@ -958,7 +1045,7 @@ def make_shorts(run: Run, settings: dict, lang: str, auto: int = 0, redo: str | 
                 write_json(mpath, mot)
                 log(f"   {len(mot['cuts'])} cuts ({time.monotonic() - t0:.0f}s)")
             sheets = sh.make_sheets(video, work / "sheets", settings["shorts"]["frame_every"], seconds)
-            vision = sh.look(sheets, vision_json, server, settings["vision_model"])
+            vision = sh.look(sheets, vision_json, server)
             cands = sh.select(segs, vision, mot, server, settings, lang, language)
         except (media.ToolError, LLMError, RuntimeError, OSError) as e:
             log(f"Fix the cause, then run again (finished steps are kept): {rerun}")
@@ -1047,7 +1134,7 @@ def cmd_voice(args) -> int:
         log(f"   to re-dub this run with it: localdub run {run.name} --redo voice")
         return 0
     settings = load_settings()
-    ctx = Ctx(settings, profile, Server(settings), False, f"localdub voice {run.name}")
+    ctx = Ctx(settings, profile, Models(settings), False, f"localdub voice {run.name}")
     log(f"localdub: voice samples for channel '{profile.name}' from run '{run.name}'")
     data = make_candidates(run, ctx, upgrade_all(read_json(segs_file)), current=True)
     if not data["candidates"] and not data["current"]:
@@ -1184,6 +1271,20 @@ def main(argv=None) -> int:
                    help="make this the channel's voice: a candidate's number, 'current' (keep it), a stretch "
                         "of the run's video (01:20-01:38) or a WAV file")
     sub.add_parser("check", parents=[common], help="check that the tools, models and server are in place")
+    from .models import EFFORT_LEVELS, EFFORTS, KINDS, TASKS
+    mo = sub.add_parser("models", parents=[common],
+                        help="which model does each task (text, vision, voice, hearing, separation), on which server; "
+                             "change them, or try one")
+    mo.add_argument("--server", metavar="NAME", help="add or change a server (--url, --kind, --key-stdin), or --remove it")
+    mo.add_argument("--url", help="the server's address, e.g. http://gpu-box:9876 or https://api.example.com")
+    mo.add_argument("--kind", choices=KINDS, help="llama-swap, or openai: any OpenAI-compatible server")
+    mo.add_argument("--key-stdin", action="store_true", help="read the server's API key from stdin (empty: no key)")
+    mo.add_argument("--remove", action="store_true", help="remove the --server")
+    mo.add_argument("--set", nargs="+", metavar="TASK=SERVER/MODEL",
+                    help=f"which model does a task ({', '.join(TASKS)}), e.g. text=main/gemma4-31b")
+    mo.add_argument("--effort", nargs="+", metavar="USE=LEVEL",
+                    help=f"how hard the text model thinks: {', '.join(EFFORTS)} = {'|'.join(EFFORT_LEVELS)}")
+    mo.add_argument("--test", choices=list(TASKS), help="try a task with one small real request")
     c = sub.add_parser("channel", parents=[common], help="show a channel's settings, or change who speaks")
     c.add_argument("name", help="the channel's name")
     c.add_argument("--speaker", choices=["man", "woman", "none"], help="set who speaks ('none' = not set)")
@@ -1194,7 +1295,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     events.configure(args.json)
     try:
-        commands = {"run": cmd_run, "shorts": cmd_shorts, "voice": cmd_voice, "check": cmd_check,
+        commands = {"run": cmd_run, "shorts": cmd_shorts, "voice": cmd_voice, "check": cmd_check, "models": cmd_models,
                     "channel": cmd_channel, "languages": cmd_languages}
         rc = commands[args.cmd](args)
     except Exception as e:  # a bug, not a handled error: still end the event stream with a result

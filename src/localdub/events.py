@@ -25,6 +25,13 @@ what the AI is doing and how fast:
   {"event": "call", "kind": "tts", "model": "qwen3-tts", "label": "line 31, take 1", "seconds": 0.9, "chars": 64,
    "audio_seconds": 3.1}
   {"event": "call", "kind": "asr", ...}  {"event": "call", "kind": "separation", ...}
+Each call also names its `server` (models.py: which server does which task).
+
+`localdub models --json` sends one "models" event: the servers (url, kind, key_set, remote,
+reachable, the models they list), the tasks (server, model, what they need) and the thinking levels;
+`localdub models --test TASK --json` one "models_test" event:
+  {"event": "models_test", "task": "voice", "server": "main", "model": "qwen3-tts", "ok": true,
+   "seconds": 2.1, "detail": "said \"…\" (4.2 s)", "tok_per_s": null, "file": ".../.models-test/voice.wav"}
 
 Stages that work line by line also report how far they are, with the line's place in the video
 (`at`, seconds), so a reader can move a playhead:

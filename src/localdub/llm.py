@@ -1,16 +1,19 @@
-"""The model server over HTTP: llama-swap on the GPU box (deploy/gpu/llama-swap.yaml).
+"""The model servers over HTTP. Each task (text, vision, voice, hearing, separation: models.py) has a
+model on a server; by default every one is on llama-swap on the GPU box (deploy/gpu/llama-swap.yaml).
 
-One URL and one API key for every model: chat and vision (/v1/chat/completions), the voice clone
-(llama.cpp's /tts behind /upstream/<model>/), transcription (/v1/audio/transcriptions) and voice/music
-separation (/upstream/<model>/separate). llama-swap starts each model's server when a request names it
-and stops the ones that can't run beside it, so localdub only frees the GPUs itself when it runs a
-tool on this machine instead (the "local" backends of Nemotron and Demucs).
+On llama-swap: chat and vision (/v1/chat/completions), the voice clone (llama.cpp's /tts behind
+/upstream/<model>/), transcription (/v1/audio/transcriptions) and voice/music separation
+(/upstream/<model>/separate). llama-swap starts each model's server when a request names it and stops
+the ones that can't run beside it, so localdub only frees the GPUs itself when it runs a tool on this
+machine instead (the "local" backends of Nemotron and Demucs). An "openai" server is any
+OpenAI-compatible one; its voice clone and separation are called at <url>/tts and <url>/separate.
+
+The stages talk to `Models`, by task: `ai.chat_json("text", …)`, `ai.tts(…)`, `ai.transcribe(…)`.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import sys
@@ -85,21 +88,6 @@ def _escape_inner_quotes(s: str) -> str:
     return "".join(out)
 
 
-def api_key(settings: dict) -> str:
-    """From the environment, else from the llama service's env file (KEY=value lines)."""
-    name = settings.get("api_key_env", "LLAMA_API_KEY")
-    if os.environ.get(name):
-        return os.environ[name]
-    try:
-        for line in open(settings.get("api_key_file", "/etc/llama.env"), encoding="utf-8"):
-            k, _, v = line.strip().partition("=")
-            if k.strip() == name:
-                return v.strip().strip("'\"")
-    except OSError:
-        pass
-    return ""
-
-
 def wav_seconds(data: bytes) -> float | None:
     """How long the WAV in `data` plays, from its header (any sample format); None if it isn't one."""
     if data[:4] != b"RIFF" or data[8:12] != b"WAVE":
@@ -137,9 +125,10 @@ def multipart(fields: list[tuple[str, str]], file_field: str, filename: str, con
 
 
 class Server:
-    def __init__(self, settings: dict):
-        self.url = settings["llm_url"].rstrip("/")
-        self.key = api_key(settings)
+    """One model server: llama-swap, or any OpenAI-compatible one (`kind` "openai")."""
+
+    def __init__(self, url: str, key: str = "", kind: str = "llama-swap", name: str = "main"):
+        self.url, self.key, self.kind, self.name = url.rstrip("/"), key, kind, name
         self.stats: list[tuple[str, float, int, float]] = []
 
     def _open(self, method: str, path: str, data=None, headers: dict | None = None, timeout: float = 1800):
@@ -153,7 +142,14 @@ class Server:
         except urllib.error.HTTPError as e:
             raise LLMError(f"{method} {path}: HTTP {e.code} {e.read()[:300]!r}") from None
         except urllib.error.URLError as e:
-            raise LLMError(f"{method} {path}: {e.reason} (is llama-swap running at {self.url}?)") from None
+            what = "llama-swap" if self.kind == "llama-swap" else f"the server '{self.name}'"
+            raise LLMError(f"{method} {path}: {e.reason} (is {what} running at {self.url}?)") from None
+        except (TimeoutError, OSError) as e:
+            raise LLMError(f"{method} {path}: {e} ({self.url})") from None
+
+    def _upstream(self, model: str, route: str) -> str:
+        """A model's own route: through llama-swap's passthrough, or on the server itself."""
+        return f"/upstream/{urllib.parse.quote(model)}/{route}" if self.kind == "llama-swap" else f"/{route}"
 
     def _req(self, method: str, path: str, body: dict | None = None, timeout: float = 1800, raw: bool = False):
         data = json.dumps(body).encode() if body is not None else None
@@ -163,17 +159,26 @@ class Server:
 
     # --- models -----------------------------------------------------------------------------
 
-    def models(self) -> list[str]:
+    def models(self, timeout: float = 30) -> list[str]:
         """The model names the server offers (whether running or not)."""
-        return [m["id"] for m in self._req("GET", "/v1/models", timeout=30).get("data", [])]
+        return [m["id"] for m in self.listed(timeout)]
+
+    def listed(self, timeout: float = 30) -> list[dict]:
+        """What /v1/models says about each model: its id and, on llama-swap, name and description."""
+        return [m for m in self._req("GET", "/v1/models", timeout=timeout).get("data", []) if m.get("id")]
 
     def running(self) -> list[str]:
-        """The models whose servers are up, starting or still stopping."""
+        """The models whose servers are up, starting or still stopping (llama-swap only)."""
+        if self.kind != "llama-swap":
+            return []
         return [m["model"] for m in self._req("GET", "/running", timeout=30).get("running", [])
                 if m.get("state") not in ("stopped", "shutdown")]
 
     def unload_all(self, keep: str | None = None) -> None:
-        """Free the GPUs for a tool that runs on this machine (local Demucs or Nemotron); `keep` stays."""
+        """Free the GPUs for a tool that runs on this machine (local Demucs or Nemotron); `keep` stays.
+        Only llama-swap can be asked to; other servers manage their own memory."""
+        if self.kind != "llama-swap":
+            return
         for name in self.running():
             if name != keep:
                 print(f"   unloading {name} to free the GPUs", file=sys.stderr)
@@ -194,8 +199,10 @@ class Server:
         tokens = usage.get("completion_tokens", 0)
         speed = timings.get("predicted_per_second", 0.0)
         self.stats.append((label, took, tokens, speed))
+        if not speed and tokens and took > 0:  # servers that don't report their speed (not llama.cpp)
+            speed = tokens / took
         prompt_speed = timings.get("prompt_per_second")
-        events.emit("call", kind="chat", model=body["model"], label=label, seconds=round(took, 2),
+        events.emit("call", kind="chat", model=body["model"], server=self.name, label=label, seconds=round(took, 2),
                     tokens=tokens, tok_per_s=round(speed, 1), prompt_tokens=usage.get("prompt_tokens"),
                     prompt_per_s=round(prompt_speed, 1) if prompt_speed is not None else None)
         if not quiet:
@@ -211,8 +218,11 @@ class Server:
 
     @staticmethod
     def _body(model, system, user, effort, max_tokens) -> dict:
-        return {"model": model, "temperature": 0.3, "max_tokens": max_tokens, "reasoning_effort": effort,
+        body = {"model": model, "temperature": 0.3, "max_tokens": max_tokens,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+        if effort != "default":  # "default": leave thinking to the server (some refuse the field)
+            body["reasoning_effort"] = effort
+        return body
 
     def chat_json(self, model: str, system: str, user, effort: str, max_tokens: int, label: str,
                   quiet: bool = False) -> dict:
@@ -241,13 +251,13 @@ class Server:
     # --- voice, transcription, separation ----------------------------------------------------------
 
     def tts(self, model: str, text: str, lang: str, ref_b64: str, seed: int, label: str = "voice clone") -> bytes:
-        """Voice clone: llama.cpp's /tts on that model's own server, through llama-swap's passthrough."""
+        """Voice clone: llama.cpp's /tts on that model's own server (through llama-swap's passthrough)."""
         body = {"input": text, "lang": lang, "seed": seed, "speaker_ref_b64": ref_b64}
         t0 = time.monotonic()
-        data = self._req("POST", f"/upstream/{model}/tts", body, timeout=900, raw=True)
+        data = self._req("POST", self._upstream(model, "tts"), body, timeout=900, raw=True)
         if data[:4] != b"RIFF":
             raise LLMError(f"/tts returned no audio for {text!r}: {data[:300]!r}")
-        events.emit("call", kind="tts", model=model, label=label,
+        events.emit("call", kind="tts", model=model, server=self.name, label=label,
                     seconds=round(time.monotonic() - t0, 2), chars=len(text), audio_seconds=wav_seconds(data))
         return data
 
@@ -261,7 +271,7 @@ class Server:
             got = json.loads(r.read())
         if "words" not in got:
             raise LLMError(f"transcription of {wav.name} returned no words: {str(got)[:300]}")
-        events.emit("call", kind="asr", model=model, label=f"transcribe {wav.name}",
+        events.emit("call", kind="asr", model=model, server=self.name, label=f"transcribe {wav.name}",
                     seconds=round(time.monotonic() - t0, 2), audio_seconds=got.get("duration"))
         return got
 
@@ -272,7 +282,7 @@ class Server:
         t0 = time.monotonic()
         with tempfile.TemporaryFile() as z:
             # the read timeout must outlast the separation itself: nothing comes back until it's done
-            with audio.open("rb") as f, self._open("POST", f"/upstream/{model}/separate", f, headers, 7200) as r:
+            with audio.open("rb") as f, self._open("POST", self._upstream(model, "separate"), f, headers, 7200) as r:
                 shutil.copyfileobj(r, z, CHUNK)
             try:
                 with zipfile.ZipFile(z) as stems:
@@ -281,5 +291,50 @@ class Server:
                             shutil.copyfileobj(src, out, CHUNK)
             except (zipfile.BadZipFile, KeyError) as e:
                 raise LLMError(f"separation returned no stems ({e})") from None
-        events.emit("call", kind="separation", model=model, label="split voice and music",
+        events.emit("call", kind="separation", model=model, server=self.name, label="split voice and music",
                     seconds=round(time.monotonic() - t0, 2))
+
+
+class Models:
+    """The model for each task, on its server: what the stages call. Text and vision by task name
+    (`chat_json("text", …)`); the voice clone, hearing and separation have one task each."""
+
+    def __init__(self, settings: dict):
+        from . import models
+        self.settings = settings
+        self.servers = {name: Server(cfg["url"], models.key(name, cfg), cfg.get("kind", "openai"), name)
+                        for name, cfg in models.servers(settings).items()}
+        self.tasks = {name: models.task(settings, name) for name in models.TASKS}
+
+    def server(self, task: str) -> Server:
+        name = self.tasks[task]["server"]
+        if name not in self.servers:
+            raise LLMError(f"the {task} task's server '{name}' isn't set up (localdub models)")
+        return self.servers[name]
+
+    def model(self, task: str) -> str:
+        return self.tasks[task]["model"]
+
+    def chat_json(self, task: str, system: str, user, effort: str, max_tokens: int, label: str,
+                  quiet: bool = False) -> dict:
+        return self.server(task).chat_json(self.model(task), system, user, effort, max_tokens, label, quiet)
+
+    def chat_text(self, task: str, system: str, user, effort: str, max_tokens: int, label: str,
+                  quiet: bool = False) -> str:
+        return self.server(task).chat_text(self.model(task), system, user, effort, max_tokens, label, quiet)
+
+    def tts(self, text: str, lang: str, ref_b64: str, seed: int, label: str = "voice clone") -> bytes:
+        return self.server("voice").tts(self.model("voice"), text, lang, ref_b64, seed, label)
+
+    def transcribe(self, wav: Path, lang: str) -> dict:
+        return self.server("hearing").transcribe(self.model("hearing"), wav, lang)
+
+    def separate(self, audio: Path, vocals: Path, music: Path) -> None:
+        self.server("separation").separate(self.model("separation"), audio, vocals, music)
+
+    def unload_all(self, keep_task: str | None = None) -> None:
+        """Frees the GPUs on every llama-swap server for a tool on this machine; `keep_task`'s model stays."""
+        keep = self.tasks[keep_task] if keep_task else None
+        for name, server in self.servers.items():
+            if server.kind == "llama-swap" and any(self.tasks[t]["server"] == name for t in self.tasks):
+                server.unload_all(keep=keep["model"] if keep and keep["server"] == name else None)
