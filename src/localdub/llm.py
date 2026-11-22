@@ -130,6 +130,8 @@ class Server:
     def __init__(self, url: str, key: str = "", kind: str = "llama-swap", name: str = "main"):
         self.url, self.key, self.kind, self.name = url.rstrip("/"), key, kind, name
         self.stats: list[tuple[str, float, int, float]] = []
+        self.cost = 0.0  # what the requests cost so far, where the server says (OpenRouter: usage.cost, in USD)
+        self.no_effort = False  # the server refused reasoning_effort once: don't send it again
 
     def _open(self, method: str, path: str, data=None, headers: dict | None = None, timeout: float = 1800):
         """Send one request and return the open response; `data` is bytes or an open file."""
@@ -192,10 +194,24 @@ class Server:
     # --- chat ---------------------------------------------------------------------------------
 
     def _chat(self, body: dict, label: str, quiet: bool) -> str:
+        if self.no_effort:
+            body.pop("reasoning_effort", None)
         t0 = time.monotonic()
-        reply = self._req("POST", "/v1/chat/completions", body)
+        try:
+            reply = self._req("POST", "/v1/chat/completions", body)
+        except LLMError as e:
+            # some models refuse a thinking level (one that must think refuses "none"): ask again without one
+            if "reasoning_effort" not in body or "HTTP 400" not in str(e) or "reason" not in str(e).lower():
+                raise
+            print(f"   {self.name} refused thinking level '{body.pop('reasoning_effort')}' for {body['model']}: "
+                  f"leaving it to the model", file=sys.stderr)
+            self.no_effort = True
+            t0 = time.monotonic()
+            reply = self._req("POST", "/v1/chat/completions", body)
         took = time.monotonic() - t0
         usage, timings = reply.get("usage") or {}, reply.get("timings") or {}
+        cost = usage.get("cost") if isinstance(usage.get("cost"), (int, float)) else None
+        self.cost += cost or 0.0
         tokens = usage.get("completion_tokens", 0)
         speed = timings.get("predicted_per_second", 0.0)
         self.stats.append((label, took, tokens, speed))
@@ -204,7 +220,8 @@ class Server:
         prompt_speed = timings.get("prompt_per_second")
         events.emit("call", kind="chat", model=body["model"], server=self.name, label=label, seconds=round(took, 2),
                     tokens=tokens, tok_per_s=round(speed, 1), prompt_tokens=usage.get("prompt_tokens"),
-                    prompt_per_s=round(prompt_speed, 1) if prompt_speed is not None else None)
+                    prompt_per_s=round(prompt_speed, 1) if prompt_speed is not None else None,
+                    **({"cost": round(cost, 6)} if cost is not None else {}))
         if not quiet:
             print(f"   {label}: {took:.0f}s, {tokens} tokens, {speed:.0f} tok/s", file=sys.stderr)
         choice = reply["choices"][0]
@@ -331,6 +348,13 @@ class Models:
 
     def separate(self, audio: Path, vocals: Path, music: Path) -> None:
         self.server("separation").separate(self.model("separation"), audio, vocals, music)
+
+    def spent(self) -> float:
+        """What the requests cost since the last time this was asked (servers that report it; else 0)."""
+        total = sum(s.cost for s in self.servers.values())
+        for s in self.servers.values():
+            s.cost = 0.0
+        return round(total, 6)
 
     def unload_all(self, keep_task: str | None = None) -> None:
         """Frees the GPUs on every llama-swap server for a tool on this machine; `keep_task`'s model stays."""

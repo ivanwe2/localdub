@@ -14,7 +14,7 @@ import {
   type Segment,
   type Waveform,
 } from "../api";
-import { waitingText } from "../format";
+import { usd, waitingText } from "../format";
 import { go, useNow } from "../hooks";
 import { clips, peaksPath, rulerTicks, stageName, stageStrip, timecode } from "../studio";
 import { ErrorText, message } from "./common";
@@ -187,6 +187,16 @@ export default function OnAir({ name, run, job, channels, busy, onChange, backTo
               <span className="chip">{shortsOnly || !channel.target_name ? `${channel.source_name} · Shorts only` : `${channel.source_name} → ${channel.target_name}`}</span>
             )}
             {segments.length > 0 && <span className="chip">{segments.length} lines</span>}
+            {run?.models?.text && (
+              <span className="chip" title="The text model that transcribed, translated and chose for it">
+                text: {run.models.text.split("/").slice(1).join("/")}
+              </span>
+            )}
+            {run?.cost ? (
+              <span className="chip" title="What its model requests cost, where the server says (hosted models)">
+                {usd(run.cost)} in API calls
+              </span>
+            ) : null}
           </div>
         </div>
         <div className="clocks">

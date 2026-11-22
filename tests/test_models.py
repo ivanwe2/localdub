@@ -1,4 +1,5 @@
 """Models from any server: the settings, `localdub models`, keys, and trying each task against the fakes."""
+import dataclasses
 import io
 import json
 import os
@@ -8,7 +9,7 @@ import pytest
 
 from localdub import models
 from localdub.llm import LLMError, Server
-from localdub.run import main
+from localdub.run import main, note_models
 from localdub.settings import load_settings
 
 
@@ -157,3 +158,54 @@ def test_a_task_on_another_server_goes_there(fake_env, capsys):
     assert by_task["text"]["server"] == "main" and "Gemma 4 31B" in by_task["text"]["snippet"]
     assert {s["name"]: s["reachable"] for s in listing["servers"]} == {"main": True, "direct": True}
     assert listing["effort_levels"][0] == "default" and listing["efforts"]["translate"] == "medium"
+
+
+def test_a_ready_made_setup_moves_text_and_vision_and_local_brings_them_back(fake_env, monkeypatch, capsys):
+    """OpenRouter's setup, pointed at the fake: it needs a key, shows prices, reports what requests cost,
+    asks a model that must think again without "none"; "local" puts text and vision back on main."""
+    fake_env["use"]()
+    url = json.loads((fake_env["home"] / "settings.json").read_text())["llm_url"]
+    monkeypatch.setitem(models.PRESETS, "openrouter", dataclasses.replace(
+        models.PRESETS["openrouter"], url=url, tasks={"text": "vendor/thinks-always", "vision": "vendor/hosted-model"},
+        suggested={"text": [("vendor/hosted-model", "cheap"), ("vendor/gone", "not offered any more")]}))
+    try:
+        assert main(["models", "--preset", "openrouter"]) == 1, "no key yet"
+        monkeypatch.setattr("sys.stdin", io.StringIO("test-key\n"))
+        assert main(["models", "--preset", "openrouter", "--key-stdin"]) == 0
+        assert models.task(load_settings(), "text") == {"server": "openrouter", "model": "vendor/thinks-always"}
+        capsys.readouterr()
+        assert main(["models", "--test", "text", "--json"]) == 0  # spelling thinks "none": refused, asked again
+        tried = events_of(capsys)
+        assert main(["models", "--json"]) == 0
+        listing = next(e for e in events_of(capsys) if e["event"] == "models")
+        assert main(["models", "--preset", "local"]) == 0
+        back = load_settings()
+    finally:
+        fake_env["use"]()
+        models.store_key("openrouter", "")
+
+    result = next(e for e in tried if e["event"] == "models_test")
+    assert result["ok"] and result["cost"] == 0.0025 and result["server"] == "openrouter"
+    assert next(e for e in tried if e["event"] == "call")["cost"] == 0.0025
+    preset = next(p for p in listing["presets"] if p["name"] == "openrouter")
+    assert preset["active"] and preset["key_set"] and preset["server"] == "openrouter"
+    assert [(s["id"], s["listed"], s["price"]) for s in preset["suggested"]["text"]] == [
+        ("vendor/hosted-model", True, {"in": 2.0, "out": 10.0}), ("vendor/gone", False, None)]
+    assert {t: models.task(back, t) for t in ("text", "vision")} == {
+        "text": {"server": "main", "model": "gemma4-31b"}, "vision": {"server": "main", "model": "gemma4-31b-vision"}}
+
+
+def test_a_run_notes_which_models_made_it_and_what_they_cost():
+    class Ai:
+        tasks = {"text": {"server": "openrouter"}, "vision": {"server": "main"}}
+
+        def model(self, task):
+            return {"text": "vendor/m", "vision": "v"}[task]
+
+        def spent(self):
+            return 0.25
+
+    state = {"cost": 0.5}
+    note_models(state, Ai(), "translate")
+    note_models(state, Ai(), "prep")  # a stage without models still adds what was spent
+    assert state == {"cost": 1.0, "models": {"text": "openrouter/vendor/m"}}

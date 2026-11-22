@@ -687,6 +687,21 @@ SHORTS_LANGS = ("original", "dub")  # run --shorts N makes both, in this order
 def run_stages(state: dict) -> list[str]:
     """The stages of this run: all of them for a dub, up to review 1 for a Shorts-only run."""
     return SHORTS_ONLY if state.get("mode") == "shorts" else NAMES
+# the model tasks each stage uses, to note in state.json which models made a run ("models")
+STAGE_TASKS = {"separate": ("separation",), "transcribe": ("hearing",), "spelling": ("text",), "translate": ("text",),
+               "voice": ("voice", "hearing", "text"), "shorts-original": ("vision", "text"),
+               "shorts-dub": ("vision", "text")}
+
+
+def note_models(st: dict, server: Models, stage: str) -> None:
+    """After a stage: which models it used (state "models": task → "server/model"), and what the
+    requests cost where a server says (state "cost", USD; OpenRouter does, your own servers don't)."""
+    for t in STAGE_TASKS.get(stage, ()):
+        st.setdefault("models", {})[t] = f"{server.tasks[t]['server']}/{server.model(t)}"
+    if spent := server.spent():
+        st["cost"] = round(st.get("cost", 0.0) + spent, 6)
+
+
 STAGE_FILES = {  # removed when a stage is redone
     "review1": ["review-1-transcript.txt", "voice-sample.wav", "voice-candidates", "voice-candidates.json"],
     "translate": ["translate-partial.json"],
@@ -811,9 +826,11 @@ def cmd_run(args) -> int:
         try:
             result = fn(run, ctx)
         except (media.ToolError, LLMError, RuntimeError, OSError) as e:
+            note_models(st, ctx.server, name)
             run.save()
             log(f"Fix the cause, then continue with: {ctx.rerun}")
             return fail(f"in stage '{name}': {e}", stage=name)
+        note_models(st, ctx.server, name)
         if result == WAIT:
             run.save()
             events.emit("stage", stage=name, status="waiting")
@@ -916,6 +933,13 @@ def cmd_models(args) -> int:
             if args.key_stdin:
                 m.store_key(name, sys.stdin.readline().strip())  # stdin, so the key is in no command line
             log(f"localdub: server '{name}' saved")
+        settings = load_settings()
+    if args.preset:
+        given = sys.stdin.readline().strip() if args.key_stdin and not args.server else None
+        if why := m.apply_preset(args.preset, settings, given):
+            return fail(why)
+        p = m.PRESETS[args.preset]
+        log(f"localdub: {p.title}: " + ", ".join(f"{t} by {model}" for t, model in m.preset_tasks(p, settings).items()))
         settings = load_settings()
     for item in args.set or []:
         task, _, rest = item.partition("=")
@@ -1077,6 +1101,9 @@ def make_shorts(run: Run, settings: dict, lang: str, auto: int = 0, redo: str | 
         except (media.ToolError, LLMError, RuntimeError, OSError) as e:
             log(f"Fix the cause, then run again (finished steps are kept): {rerun}")
             return fail(str(e), stage=f"shorts-{lang}")
+        finally:  # which models looked and chose, and what they cost, either way
+            note_models(run.state, server, f"shorts-{lang}")
+            run.save()
         if not cands:
             return fail(f"no usable candidates came back; try again with: {rerun} --redo select", stage=f"shorts-{lang}")
         write_json(cand_json, cands)
@@ -1451,7 +1478,7 @@ def main(argv=None) -> int:
     ck = sub.add_parser("check", parents=[common], help="check that the tools, models and server are in place")
     ck.add_argument("--notify", action="store_true", help="also send a test notification (settings: notify.ntfy)")
     sub.add_parser("guide", parents=[common], help="the guide for AI agents driving localdub: the loop, files, events")
-    from .models import EFFORT_LEVELS, EFFORTS, KINDS, TASKS
+    from .models import EFFORT_LEVELS, EFFORTS, KINDS, PRESETS, TASKS
     mo = sub.add_parser("models", parents=[common],
                         help="which model does each task (text, vision, voice, hearing, separation), on which server; "
                              "change them, or try one")
@@ -1465,6 +1492,9 @@ def main(argv=None) -> int:
     mo.add_argument("--effort", nargs="+", metavar="USE=LEVEL",
                     help=f"how hard the text model thinks: {', '.join(EFFORTS)} = {'|'.join(EFFORT_LEVELS)}")
     mo.add_argument("--test", choices=list(TASKS), help="try a task with one small real request")
+    mo.add_argument("--preset", choices=list(PRESETS),
+                    help="a ready-made setup: openrouter (text and vision on OpenRouter; its key with --key-stdin) "
+                         "or local (back to your own models)")
     c = sub.add_parser("channel", parents=[common], help="show a channel's settings, or change who speaks")
     c.add_argument("name", help="the channel's name")
     c.add_argument("--speaker", choices=["man", "woman", "none"], help="set who speaks ('none' = not set)")

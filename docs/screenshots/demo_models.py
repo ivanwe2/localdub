@@ -37,5 +37,12 @@ print(json.dumps({"event": "models",
                               server("studio-pc", "http://studio-pc.lan:1234", "openai", STUDIO_PC, None)],
                   "tasks": tasks,
                   "efforts": {"spelling": "none", "translate": "medium", "shorten": "none", "shorts": "low"},
-                  "effort_levels": list(models.EFFORT_LEVELS), "kinds": list(models.KINDS)}))
+                  "effort_levels": list(models.EFFORT_LEVELS), "kinds": list(models.KINDS),
+                  "presets": [{"name": p.name, "title": p.title, "what": p.what, "url": p.url, "keys_at": p.keys_at,
+                               "server": p.name if p.url else "main", "set_up": False, "key_set": False,
+                               "tasks": p.tasks or {"text": "gemma4-31b", "vision": "gemma4-31b-vision"},
+                               "active": p.url is None,
+                               "suggested": {t: [{"id": m, "why": w, "listed": False, "price": None} for m, w in o]
+                                             for t, o in p.suggested.items()}}
+                              for p in models.PRESETS.values()]}))
 print(json.dumps({"event": "result", "status": "done", "exit_code": 0}))

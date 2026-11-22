@@ -154,7 +154,15 @@ localdub models --server studio --url http://studio-pc.lan:1234 --kind openai
 localdub models --set text=studio/qwen3-32b                 # the text task on that server
 localdub models --server cloud --url https://api.example.com --kind openai --key-stdin < key.txt
 localdub models --server cloud --remove                     # (once no task uses it)
+localdub models --preset openrouter --key-stdin < or-key.txt  # text and vision on OpenRouter's hosted models
+localdub models --set text=openrouter/anthropic/claude-opus-5.5   # another of them
+localdub models --preset local                              # text and vision back on your own server
 ```
+
+The OpenRouter setup is for comparing frontier models with your own, or for working without a big GPU
+for text: the voice clone, hearing and separation stay local. Its requests cost money (OpenRouter
+reports each one; a run adds them up in `state.json` as `cost`, and records the models that made it as
+`models`). To compare, dub the same video again under another name with the other model on.
 
 The five tasks are text, vision, voice, hearing and separation (the README's "Models" table says what
 each needs). A server is `llama-swap` or `openai` (any OpenAI-compatible server). Keys are read from
@@ -175,7 +183,7 @@ All of them take `--json`.
 | `localdub voice NAME [--pick N\|current\|MM:SS-MM:SS\|file.wav]` | compare voice samples from a run, pick one for the channel |
 | `localdub line NAME ID [--text WORDS \| --text-stdin] [--new-take]` | show one line of a finished dub, or fix it: new words or another take; the dub and its dubbed Shorts are made again |
 | `localdub channel NAME [--speaker man\|woman\|none]` | a channel's languages, speaker and voice; change the speaker |
-| `localdub models [--server NAME --url URL --kind K --key-stdin \| --remove] [--set TASK=SERVER/MODEL…] [--effort USE=LEVEL…] [--test TASK]` | which model does each task, on which server; change them; try one |
+| `localdub models [--server NAME --url URL --kind K --key-stdin \| --remove] [--set TASK=SERVER/MODEL…] [--effort USE=LEVEL…] [--test TASK] [--preset openrouter\|local]` | which model does each task, on which server; change them; try one; a ready-made setup |
 | `localdub guide` | the guide for AI agents |
 
 Times are `mm:ss` or seconds. Stages for `--redo`: prep, separate, transcribe, spelling, review1,

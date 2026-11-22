@@ -37,7 +37,7 @@ if [ "$1" = "models" ]; then
         echo '{"event": "result", "status": "error", "exit_code": 1, "error": "no key on stdin"}'; exit 1
       fi
       echo "$done"; exit 0 ;;
-    *" --set "*|*" --effort "*|*" --server "*)
+    *" --set "*|*" --effort "*|*" --server "*|*" --preset "*)
       echo "$done"; exit 0 ;;
   esac
   echo '{"event": "models", "servers": [{"name": "main", "url": "http://127.0.0.1:9876", "kind": "llama-swap", "key_set": true, "remote": false, "reachable": true, "models": [{"id": "gemma4-31b"}]}], "tasks": [{"task": "text", "server": "main", "model": "gemma4-31b"}], "efforts": {"translate": "medium"}}'

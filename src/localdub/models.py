@@ -279,6 +279,83 @@ def effort(settings: dict, use: str) -> str:
     return settings["shorts"]["select_effort"] if use == "shorts" else settings[EFFORTS[use]]
 
 
+# --- ready-made setups ----------------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Preset:
+    name: str  # also the server's name it makes
+    title: str
+    what: str
+    url: str | None  # None: the server main, with the models from the older settings keys
+    kind: str
+    keys_at: str  # where to get a key ("" for none)
+    tasks: dict  # task → the model the setup gives it
+    suggested: dict  # task → [(model, why)]: good choices to try, for comparing
+
+
+# OpenRouter's model names, as https://openrouter.ai/api/v1/models listed them in November 2026
+PRESETS: dict[str, Preset] = {p.name: p for p in [
+    Preset(
+        "openrouter", "OpenRouter",
+        "One key for hundreds of hosted models, paid per use: frontier models to compare with your own. Text and "
+        "vision only: the voice clone, hearing and separation stay on your GPUs. The transcript, the translation "
+        "and frames of the video go to OpenRouter and the model's provider.",
+        "https://openrouter.ai/api", "openai", "https://openrouter.ai/keys",
+        {"text": "anthropic/claude-sonnet-5.5", "vision": "google/gemini-4-hydrogen"},
+        {"text": [("anthropic/claude-opus-5.5", "the strongest translations, at the highest price"),
+                  ("anthropic/claude-sonnet-5.5", "strong translations at half Opus's price (this setup's choice)"),
+                  ("openai/gpt-6.2-sol", "OpenAI's current all-rounder"),
+                  ("google/gemini-4-hydrogen", "quick, and cheaper"),
+                  ("anthropic/claude-haiku-5.5", "cheap and fast: a few cents per video"),
+                  ("deepseek/deepseek-v4.1-flash", "the cheapest: about a cent per video")],
+         "vision": [("google/gemini-4-hydrogen", "sharp eyes at a low price (this setup's choice)"),
+                    ("anthropic/claude-sonnet-5.5", "careful descriptions"),
+                    ("openai/gpt-6-luna", "cheap"),
+                    ("qwen/qwen3.8-flash", "the cheapest")]},
+    ),
+    Preset(
+        "local", "Your own models",
+        "Text and vision back on your own server (main), with the models localdub is tuned with.",
+        None, "llama-swap", "", {}, {},
+    ),
+]}
+
+
+def preset_tasks(p: Preset, settings: dict) -> dict:
+    """The models a setup gives its tasks; "local" takes them from the settings' older keys."""
+    if p.url is None:
+        return {t: settings[TASKS[t].setting] for t in ("text", "vision")}
+    return dict(p.tasks)
+
+
+def apply_preset(name: str, settings: dict, new_key: str | None = None) -> str | None:
+    """Sets up a ready-made setup: its server (with the key, if one is given) and its tasks' models.
+    None when done, else why not (an unknown setup, or a hosted one without a key)."""
+    p = PRESETS.get(name)
+    if p is None:
+        return f"no ready-made setup {name!r}; there are: {', '.join(PRESETS)}"
+    server = "main"
+    if p.url is not None:
+        server = p.name
+        save_server(server, p.url, p.kind, settings, new_key=new_key is not None)
+        if new_key is not None:
+            store_key(server, new_key)
+        if not key(server, servers(settings).get(server, {})):
+            return f"{p.title} needs a key: get one at {p.keys_at}, then give it with --key-stdin"
+    for t, model in preset_tasks(p, settings).items():
+        save_task(t, server, model)
+    return None
+
+
+def _price(m: dict) -> dict | None:
+    """A listed model's price in USD per million tokens, where the server says (OpenRouter's "pricing")."""
+    try:
+        p = m["pricing"]
+        return {"in": round(float(p["prompt"]) * 1e6, 3), "out": round(float(p["completion"]) * 1e6, 3)}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 # --- what the servers offer, and trying a task ----------------------------------------------------------
 
 def overview(settings: dict) -> dict:
@@ -293,8 +370,8 @@ def overview(settings: dict) -> dict:
                "key_source": "stored" if name in stored_keys() else (cfg.get("key_env") or None),
                "remote": is_remote(server.url), "reachable": False, "error": None, "models": []}
         try:
-            row["models"] = [{"id": m["id"], "name": m.get("name") or None, "description": m.get("description") or None}
-                             for m in server.listed(timeout=8)]
+            row["models"] = [{"id": m["id"], "name": m.get("name") or None, "description": m.get("description") or None,
+                              "price": _price(m)} for m in server.listed(timeout=8)]
             row["reachable"] = True
         except LLMError as e:
             row["reachable"] = ": HTTP " in str(e)  # it answered, but lists no models (a TTS or Demucs server)
@@ -307,8 +384,21 @@ def overview(settings: dict) -> dict:
         tasks.append({"task": name, "title": t.title, "what": t.what, "used_by": list(t.used_by), "needs": t.needs,
                       "examples": list(t.examples), "snippet": t.snippet, "server": cfg["server"], "model": cfg["model"],
                       "listed": any(m["id"] == cfg["model"] for m in listed)})
+    presets = []
+    for p in PRESETS.values():
+        server = p.name if p.url is not None else "main"
+        row = next((r for r in rows if r["name"] == server), None)
+        listed = {m["id"]: m for m in (row or {}).get("models", [])}
+        wanted = preset_tasks(p, settings)
+        presets.append({
+            "name": p.name, "title": p.title, "what": p.what, "url": p.url, "keys_at": p.keys_at, "server": server,
+            "set_up": row is not None, "key_set": bool(row and row["key_set"]), "tasks": wanted,
+            "active": all(task(settings, t) == {"server": server, "model": m} for t, m in wanted.items()),
+            "suggested": {t: [{"id": m, "why": why, "listed": m in listed, "price": (listed.get(m) or {}).get("price")}
+                              for m, why in options] for t, options in p.suggested.items()},
+        })
     return {"servers": rows, "tasks": tasks, "efforts": {use: effort(settings, use) for use in EFFORTS},
-            "effort_levels": list(EFFORT_LEVELS), "kinds": list(KINDS)}
+            "effort_levels": list(EFFORT_LEVELS), "kinds": list(KINDS), "presets": presets}
 
 
 def trial_dir() -> Path:
@@ -356,7 +446,7 @@ def try_task(name: str, settings: dict) -> dict:
     from .llm import LLMError, Models, wav_seconds
     ai = Models(settings)
     out = {"task": name, "server": ai.tasks[name]["server"], "model": ai.model(name), "ok": False,
-           "seconds": 0.0, "detail": "", "tok_per_s": None, "file": None}
+           "seconds": 0.0, "detail": "", "tok_per_s": None, "file": None, "cost": None}
     t0 = time.monotonic()
     try:
         if name == "text":
@@ -403,4 +493,5 @@ def try_task(name: str, settings: dict) -> dict:
     except (LLMError, OSError, ValueError, KeyError) as e:
         out["detail"] = str(e)[:300]
     out["seconds"] = round(time.monotonic() - t0, 1)
+    out["cost"] = ai.spent() or None  # in USD, where the server says what a request cost
     return out

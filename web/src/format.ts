@@ -204,6 +204,18 @@ export function jobNotice(job: Pick<Job, "run" | "state" | "waiting_for" | "erro
   return null;
 }
 
+/** 0.4213 → "$0.42", 0.0025 → "$0.0025": what model requests cost, readable at any size. */
+export function usd(amount: number): string {
+  if (amount >= 0.01) return `$${amount.toFixed(2)}`;
+  return `$${Number(amount.toPrecision(2))}`;
+}
+
+/** A price per million tokens: "$2 in · $10 out per M tokens". */
+export function priceText(p: { in: number; out: number }): string {
+  const n = (x: number) => (x >= 1 ? String(Number(x.toFixed(2))) : String(Number(x.toPrecision(2))));
+  return `$${n(p.in)} in · $${n(p.out)} out per M tokens`;
+}
+
 /** The review text with its status line set to approved, which tells the engine to go on. */
 export function approve(text: string): string {
   const lines = text.split("\n");

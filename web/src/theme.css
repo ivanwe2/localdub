@@ -1938,6 +1938,11 @@ dl.details dd {
   border-top: 1px solid var(--line);
 }
 
+.preset + .preset {
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
 /* --- fixing a line of a finished dub (LineFixer) --- */
 
 button.clip {

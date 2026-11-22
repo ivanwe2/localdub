@@ -19,6 +19,7 @@ export interface Call {
   prompt_per_s: number | null;
   chars: number | null;
   audio_seconds: number | null;
+  cost?: number | null; // USD, where the server says (OpenRouter)
 }
 
 /** The one run the server is working on, or did last (server/src/job.rs). */
@@ -112,6 +113,8 @@ export interface RunSummary {
   finished: boolean; // the dub is ready (Shorts only: its Shorts are)
   files: RunFiles;
   waiting_for: Waiting | null;
+  cost?: number | null; // what its model requests cost in USD, where a server says (hosted ones); null: nothing charged
+  models?: Record<string, string>; // task → "server/model" that made it
 }
 
 /** How loud the speaker's voice and the music are along the video: 0–100 per step. */
@@ -428,7 +431,28 @@ export interface ModelServerInfo {
   remote: boolean; // off this machine and its network: frames, transcripts and voice samples go there
   reachable: boolean;
   error: string | null;
-  models: { id: string; name: string | null; description: string | null }[];
+  models: { id: string; name: string | null; description: string | null; price?: Price | null }[];
+}
+
+/** A hosted model's price in USD per million tokens (OpenRouter lists them). */
+export interface Price {
+  in: number;
+  out: number;
+}
+
+/** A ready-made setup (models.py PRESETS): OpenRouter for text and vision, or back to your own models. */
+export interface Preset {
+  name: string; // "openrouter", "local"
+  title: string;
+  what: string;
+  url: string | null;
+  keys_at: string; // where to get a key ("" for none)
+  server: string; // the server it uses
+  set_up: boolean;
+  key_set: boolean;
+  tasks: Record<string, string>; // task → model it sets
+  active: boolean; // those tasks run on it now
+  suggested: Record<string, { id: string; why: string; listed: boolean; price: Price | null }[]>;
 }
 
 /** One of the five tasks, the model doing it, and what it needs. */
@@ -451,6 +475,7 @@ export interface ModelsOverview {
   efforts: Record<string, string>; // spelling, translate, shorten, shorts → level
   effort_levels: string[];
   kinds: string[];
+  presets?: Preset[];
 }
 
 /** How trying a task went (POST /api/models/test). */
@@ -463,6 +488,7 @@ export interface ModelTest {
   detail: string;
   tok_per_s: number | null;
   file: string | null; // the voice test's clip, to play
+  cost?: number | null; // USD, where the server says
 }
 
 export async function getModels(): Promise<ModelsOverview> {
@@ -476,6 +502,11 @@ function sendJson(method: string, url: string, body: unknown): Promise<Response>
 /** Moves tasks to other models or servers, and changes the thinking levels. */
 export async function saveModels(change: { tasks?: Record<string, { server: string; model: string }>; efforts?: Record<string, string> }): Promise<void> {
   await sendJson("PUT", "/api/models", change);
+}
+
+/** Sets up a ready-made setup ("openrouter" with its key, or "local"). */
+export async function applyPreset(name: string, key?: string): Promise<void> {
+  await sendJson("POST", `/api/models/presets/${encodeURIComponent(name)}`, key ? { key } : {});
 }
 
 /** Adds or changes a server; `key` undefined keeps its key, "" removes it. */

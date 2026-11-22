@@ -19,6 +19,8 @@ import {
   formatBytes,
   formatSeconds,
   jobNotice,
+  priceText,
+  usd,
   sparkline,
   progress,
   suggestName,
@@ -273,5 +275,15 @@ describe("downloads", () => {
   it("suggests a run name from the title", () => {
     expect(nameFromTitle("Me at the zoo!")).toBe("Me-at-the-zoo");
     expect(nameFromTitle("Пазарът в събота | част 2")).toBe("Пазарът-в-събота-част-2");
+  });
+});
+
+describe("money", () => {
+  it("costs and prices read well at any size", () => {
+    expect(usd(1.234)).toBe("$1.23");
+    expect(usd(0.42)).toBe("$0.42");
+    expect(usd(0.0025)).toBe("$0.0025");
+    expect(priceText({ in: 2, out: 10 })).toBe("$2 in · $10 out per M tokens");
+    expect(priceText({ in: 0.05, out: 0.2 })).toBe("$0.05 in · $0.2 out per M tokens");
   });
 });
