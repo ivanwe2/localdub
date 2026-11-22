@@ -903,7 +903,9 @@ def cmd_models(args) -> int:
             if args.url is not None and not re.fullmatch(r"https?://[^\s]+", args.url):
                 return fail(f"--url {args.url!r}: an http:// or https:// address")
             if args.url is not None or args.kind:
-                m.save_server(name, args.url, args.kind)
+                if m.save_server(name, args.url, args.kind, settings, new_key=args.key_stdin):
+                    log(f"localdub: server '{name}' moved to another address: its saved key is forgotten "
+                        f"(give it again with --key-stdin)")
             if args.key_stdin:
                 m.store_key(name, sys.stdin.readline().strip())  # stdin, so the key is in no command line
             log(f"localdub: server '{name}' saved")

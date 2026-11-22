@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 
 import { AiConsole, Machines } from "./components/Console";
 import Header from "./components/Header";
+import ModelsScreen from "./components/ModelsScreen";
 import NewRun from "./components/NewRun";
 import OnAir from "./components/OnAir";
 import ReviewScreen from "./components/ReviewScreen";
@@ -89,6 +90,7 @@ export default function App() {
             </>
           )}
           {route.page === "new" && <NewRun busy={busy} channels={channels} onStarted={onChange} />}
+          {route.page === "models" && <ModelsScreen busy={busy} />}
           {route.page === "review" && <ReviewScreen name={route.run} runs={runs} channels={channels} busy={busy} onChange={onChange} />}
           {route.page === "voices" && <VoiceScreen name={route.run} runs={runs} busy={busy} onChange={onChange} />}
           {route.page === "shorts" && <ShortsScreen name={route.run} runs={runs} channels={channels} busy={busy} onChange={onChange} />}

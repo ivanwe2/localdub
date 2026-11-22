@@ -7,6 +7,7 @@ pub mod channels;
 pub mod download;
 pub mod events;
 pub mod job;
+pub mod models;
 pub mod runner;
 pub mod runs;
 pub mod start;
@@ -80,6 +81,8 @@ pub struct AppState {
     pub ytdlp: Option<Arc<Vec<String>>>,
     /// The current (or last) download, beside the job: a download needs no GPU.
     pub download: Arc<watch::Sender<Option<Download>>>,
+    /// Held while a model is being tried (POST /api/models/test): one at a time.
+    pub model_test: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AppState {
@@ -94,6 +97,7 @@ impl AppState {
             client: reqwest::Client::new(),
             ytdlp: None,
             download: Arc::new(watch::Sender::new(None)),
+            model_test: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -605,6 +609,166 @@ async fn get_languages(State(state): State<AppState>) -> Result<Json<Vec<Languag
     Ok(Json(languages))
 }
 
+/// Runs a short engine command (not a run: no job), with `input` on its stdin; its exit code,
+/// events and messages.
+async fn engine_command(
+    state: &AppState,
+    args: Vec<String>,
+    input: Option<String>,
+) -> Result<(i32, Vec<Event>, Vec<String>), Failure> {
+    let Some((program, before)) = state.engine.split_first() else {
+        return Err(server_error(
+            "no engine command configured (LOCALDUB_ENGINE)",
+        ));
+    };
+    let mut all_args = before.to_vec();
+    all_args.extend(args);
+    let (mut events, mut log) = (Vec::new(), Vec::new());
+    let code = runner::run_engine_with_input(
+        program,
+        &all_args,
+        input,
+        |event| events.push(event),
+        |line| log.push(line),
+    )
+    .await
+    .map_err(|e| server_error(format!("could not start the engine ({program}): {e}")))?;
+    Ok((code, events, log))
+}
+
+/// Why an engine command failed: its result's error, else its last messages.
+fn engine_error(events: &[Event], log: &[String]) -> String {
+    events
+        .iter()
+        .rev()
+        .find_map(|event| match event {
+            Event::Result {
+                error: Some(error), ..
+            } => Some(error.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| log[log.len().saturating_sub(3)..].join("\n"))
+}
+
+/// An engine command that changes the settings: 204, or `refused` with the engine's reason.
+async fn engine_change(
+    state: &AppState,
+    args: Vec<String>,
+    input: Option<String>,
+    refused: StatusCode,
+) -> Result<StatusCode, Failure> {
+    let (code, events, log) = engine_command(state, args, input).await?;
+    if code == 0 {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err((refused, engine_error(&events, &log)))
+    }
+}
+
+/// GET /api/models: the servers (reachable? which models they list?), the model doing each task
+/// and what each task needs, the thinking levels (`localdub models`). Keys only as "set".
+async fn get_models(State(state): State<AppState>) -> Result<Json<serde_json::Value>, Failure> {
+    let (code, events, log) = engine_command(&state, vec!["models".into()], None).await?;
+    events
+        .into_iter()
+        .find_map(|event| match event {
+            Event::Models(overview) => Some(Json(serde_json::Value::Object(overview))),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            server_error(format!(
+                "the engine listed no models (exit code {code}): {}",
+                log.join("\n")
+            ))
+        })
+}
+
+/// PUT /api/models `{"tasks": {"text": {"server": "main", "model": "…"}}, "efforts": {"translate": "low"}}`.
+async fn put_models(
+    State(state): State<AppState>,
+    Json(change): Json<models::Change>,
+) -> Result<StatusCode, Failure> {
+    let args = change
+        .args()
+        .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e))?;
+    engine_change(&state, args, None, StatusCode::UNPROCESSABLE_ENTITY).await
+}
+
+/// PUT /api/models/servers/{name} `{"url": "…", "kind": "openai", "key": "…"}`: adds or changes a
+/// server; the key (optional) goes to the engine on stdin.
+async fn put_model_server(
+    State(state): State<AppState>,
+    UrlPath(name): UrlPath<String>,
+    Json(change): Json<models::ServerChange>,
+) -> Result<StatusCode, Failure> {
+    let (args, key) = change
+        .args(&name)
+        .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e))?;
+    engine_change(&state, args, key, StatusCode::UNPROCESSABLE_ENTITY).await
+}
+
+/// DELETE /api/models/servers/{name}: refused (409) while a task uses it, and for `main`.
+async fn delete_model_server(
+    State(state): State<AppState>,
+    UrlPath(name): UrlPath<String>,
+) -> Result<StatusCode, Failure> {
+    let args = models::remove_args(&name).map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e))?;
+    engine_change(&state, args, None, StatusCode::CONFLICT).await
+}
+
+/// POST /api/models/test `{"task": "voice"}`: tries a task with one small real request and says
+/// how it went. Not while a run is on air (it would load a model beside the run's), and one at a
+/// time. A voice test's clip is at GET /api/models/test/voice.wav.
+async fn test_model(
+    State(state): State<AppState>,
+    Json(req): Json<models::TestRequest>,
+) -> Result<Json<serde_json::Value>, Failure> {
+    let args = models::test_args(&req.task).map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e))?;
+    let on_air = state
+        .job
+        .borrow()
+        .as_ref()
+        .filter(|job| job.state == JobState::Running)
+        .map(|job| job.run.clone());
+    if let Some(run) = on_air {
+        let msg = format!("'{run}' is on air; try models when it's done (they share the GPUs)");
+        return Err((StatusCode::CONFLICT, msg));
+    }
+    let Ok(_trying) = state.model_test.try_lock() else {
+        return Err((
+            StatusCode::CONFLICT,
+            "a model is being tried already".into(),
+        ));
+    };
+    let (code, events, log) = tokio::time::timeout(
+        std::time::Duration::from_secs(900), // loading a big model can take minutes
+        engine_command(&state, args, None),
+    )
+    .await
+    .map_err(|_| {
+        (
+            StatusCode::GATEWAY_TIMEOUT,
+            "trying the model took over 15 minutes".to_string(),
+        )
+    })??;
+    let mut result = events
+        .into_iter()
+        .find_map(|event| match event {
+            Event::ModelsTest(result) => Some(result),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            server_error(format!(
+                "the engine said nothing about the test (exit code {code}): {}",
+                log.join("\n")
+            ))
+        })?;
+    if result.get("file").is_some_and(|f| f.is_string()) {
+        result.insert("file".into(), "/api/models/test/voice.wav".into());
+    }
+    Ok(Json(serde_json::Value::Object(result)))
+}
+
 /// GET /api/status: the models and GPUs right now (asked on the spot).
 async fn get_status(State(state): State<AppState>) -> Json<Status> {
     match &state.models {
@@ -672,6 +836,16 @@ pub fn app(state: AppState) -> Router {
         .route("/runs/{name}/waveform", get(get_waveform))
         .route("/channels", get(get_channels))
         .route("/languages", get(get_languages))
+        .route("/models", get(get_models).put(put_models))
+        .route(
+            "/models/servers/{name}",
+            put(put_model_server).delete(delete_model_server),
+        )
+        .route("/models/test", post(test_model))
+        .route_service(
+            "/models/test/voice.wav",
+            ServeFile::new(state.home.join(".models-test").join("voice.wav")),
+        )
         .route("/videos", get(list_videos))
         .route(
             "/videos/{file}",
@@ -1479,6 +1653,82 @@ mod tests {
 
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert!(text.contains("listed no languages"), "{text}");
+    }
+
+    /// A request with a JSON body and any method; returns the status and the body as text.
+    async fn send_body(app: Router, method: &str, path: &str, body: Value) -> (StatusCode, String) {
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        get_text_from(app, request).await
+    }
+
+    #[tokio::test]
+    async fn the_models_screen_lists_and_changes_them_through_the_engine() {
+        let home = tempfile::tempdir().unwrap();
+        let state = test_state(home.path());
+        let a = || app(state.clone());
+
+        let (status, overview) = get_json(a(), "/api/models").await;
+        let picks = json!({"tasks": {"text": {"server": "main", "model": "gemma4-31b"}}, "efforts": {"translate": "low"}});
+        let (set, _) = send_body(a(), "PUT", "/api/models", picks).await;
+        let unknown = json!({"tasks": {"speech": {"server": "main", "model": "x"}}});
+        let (refused, why) = send_body(a(), "PUT", "/api/models", unknown).await;
+        let server =
+            |key: &str| json!({"url": "https://api.example.com", "kind": "openai", "key": key});
+        let (keyed, _) =
+            send_body(a(), "PUT", "/api/models/servers/cloud", server("sk-test")).await;
+        let (unkeyed, no_key) =
+            send_body(a(), "PUT", "/api/models/servers/cloud", server("other")).await;
+        let (kept, stays) = send_body(a(), "DELETE", "/api/models/servers/main", json!(null)).await;
+        let (removed, _) = send_body(a(), "DELETE", "/api/models/servers/cloud", json!(null)).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(overview["tasks"][0]["model"], "gemma4-31b");
+        assert_eq!(set, StatusCode::NO_CONTENT);
+        assert_eq!(refused, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(why.contains("task \"speech\""), "{why}");
+        assert_eq!(keyed, StatusCode::NO_CONTENT, "the key came on stdin");
+        assert_eq!(unkeyed, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(no_key.contains("no key on stdin"), "{no_key}");
+        assert_eq!(kept, StatusCode::CONFLICT);
+        assert!(stays.contains("main stays"), "{stays}");
+        assert_eq!(removed, StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn a_model_is_tried_only_when_no_run_is_on_air_and_its_clip_is_served() {
+        let home = tempfile::tempdir().unwrap();
+        let state = test_state(home.path());
+        let a = || app(state.clone());
+        let clip = home.path().join(".models-test");
+        std::fs::create_dir_all(&clip).unwrap();
+        std::fs::write(clip.join("voice.wav"), "RIFF").unwrap();
+
+        let (status, result) = post_json(a(), "/api/models/test", json!({"task": "voice"})).await;
+        let (bad, _) = post_json(a(), "/api/models/test", json!({"task": "--help"})).await;
+        let (served, wav) = get_text(a(), "/api/models/test/voice.wav", &[]).await;
+        let (started, _) = post_json(a(), "/api/runs", start_body(&state, "slow-run")).await;
+        let (busy, why) = send_body(a(), "POST", "/api/models/test", json!({"task": "text"})).await;
+        job_when_settled(&state).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            (&result["task"], &result["ok"]),
+            (&json!("voice"), &json!(true))
+        );
+        assert_eq!(
+            result["file"], "/api/models/test/voice.wav",
+            "a URL, not the engine's path"
+        );
+        assert_eq!(bad, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!((served, wav.as_str()), (StatusCode::OK, "RIFF"));
+        assert_eq!(started, StatusCode::ACCEPTED);
+        assert_eq!(busy, StatusCode::CONFLICT);
+        assert!(why.contains("is on air"), "{why}");
     }
 
     #[tokio::test]

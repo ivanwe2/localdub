@@ -2,10 +2,11 @@
 // The screens in a simulated browser (jsdom), against a fake server: what a person clicks, and
 // what the page sends.
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Channel, RunSummary } from "../api";
+import ModelsScreen from "./ModelsScreen";
 import NewRun from "./NewRun";
 import ReviewScreen from "./ReviewScreen";
 import ShortsScreen from "./ShortsScreen";
@@ -234,5 +235,61 @@ describe("Review 1", () => {
     const saved = sent.find((s) => s.method === "PUT")!.body!;
     expect(saved.split("\n")[0]).toBe("status: approved");
     expect(saved).toContain("BG: Хлебарят Кирчо ни дава питка.");
+  });
+});
+
+const OVERVIEW = {
+  servers: [
+    {
+      name: "main", url: "http://127.0.0.1:9876", kind: "llama-swap", key_set: true, key_source: "LLAMA_API_KEY", remote: false,
+      reachable: true, error: null,
+      models: [
+        { id: "gemma4-31b", name: "Gemma 4 31B", description: "text for localdub" },
+        { id: "qwen38", name: null, description: null },
+        { id: "qwen3-tts", name: null, description: null },
+      ],
+    },
+    { name: "cloud", url: "https://api.example.com", kind: "openai", key_set: true, key_source: "stored", remote: true, reachable: false, error: "offline", models: [] },
+  ],
+  tasks: [
+    { task: "text", title: "Text", what: "Translates.", used_by: ["translate"], needs: "A chat model.", examples: ["Gemma"], snippet: "gemma4-31b:\n", server: "main", model: "gemma4-31b", listed: true },
+    { task: "voice", title: "Voice", what: "Speaks.", used_by: ["voice"], needs: "Qwen3-TTS.", examples: ["Qwen3-TTS"], snippet: "qwen3-tts:\n", server: "main", model: "qwen3-tts", listed: true },
+  ],
+  efforts: { spelling: "none", translate: "medium", shorten: "none", shorts: "low" },
+  effort_levels: ["default", "none", "low", "medium", "high"],
+  kinds: ["llama-swap", "openai"],
+};
+
+describe("Models", () => {
+  it("moves a task to another model, changes how hard it thinks, and tries the voice", async () => {
+    const sent = serve({
+      "GET /api/models": OVERVIEW,
+      "PUT /api/models": "",
+      "POST /api/models/test": {
+        task: "voice", server: "main", model: "qwen3-tts", ok: true, seconds: 2.1, detail: 'said "Hi everyone"', tok_per_s: null,
+        file: "/api/models/test/voice.wav",
+      },
+    });
+    render(<ModelsScreen busy={false} />);
+    const puts = () => sent.filter((s) => s.method === "PUT").map((s) => JSON.parse(s.body!));
+
+    const text = await screen.findByRole("region", { name: "Text" });
+    fireEvent.change(within(text).getByLabelText(/^Model/), { target: { value: "qwen38" } });
+    fireEvent.click(within(text).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(puts()).toHaveLength(1));
+    expect(puts()[0]).toEqual({ tasks: { text: { server: "main", model: "qwen38" } } });
+
+    fireEvent.change(within(text).getByLabelText("Translation"), { target: { value: "low" } });
+    fireEvent.click(within(text).getByRole("button", { name: "Save how it thinks" }));
+    await waitFor(() => expect(puts()).toHaveLength(2));
+    expect(puts()[1]).toEqual({ efforts: { translate: "low" } });
+
+    const voice = screen.getByRole("region", { name: "Voice" });
+    fireEvent.click(within(voice).getByRole("button", { name: "Try it" }));
+    expect(await within(voice).findByText("Works")).toBeTruthy();
+    expect(voice.querySelector("audio")?.getAttribute("src")).toMatch(/^\/api\/models\/test\/voice\.wav\?t=/);
+    const servers = screen.getByRole("region", { name: "Servers" });
+    expect(within(servers).getByText(/off your network/)).toBeTruthy();
+    expect(within(servers).getByText("not reachable")).toBeTruthy();
   });
 });

@@ -221,8 +221,17 @@ def _write_saved(data: dict) -> None:
     tmp.replace(path)
 
 
-def save_server(name: str, url: str | None, kind: str | None) -> None:
-    """Adds or changes a server in settings.json (only what's given; the rest of the file stays)."""
+def _origin(url: str) -> tuple[str, str, int | None]:
+    parts = urllib.parse.urlsplit(url)
+    return parts.scheme.lower(), (parts.hostname or "").lower(), parts.port
+
+
+def save_server(name: str, url: str | None, kind: str | None, settings: dict, new_key: bool = False) -> bool:
+    """Adds or changes a server in settings.json (only what's given; the rest of the file stays).
+    A server that moves to another address (scheme, host or port) forgets its saved key, unless a
+    new one comes with the change: a key is never sent to a place it wasn't given for. Returns
+    whether a saved key was forgotten."""
+    before = servers(settings).get(name, {}).get("url")
     data = _read_saved()
     cfg = data.setdefault("servers", {}).setdefault(name, {})
     if url is not None:
@@ -230,6 +239,11 @@ def save_server(name: str, url: str | None, kind: str | None) -> None:
     if kind is not None:
         cfg["kind"] = kind
     _write_saved(data)
+    moved = url is not None and before is not None and _origin(before) != _origin(url)
+    if moved and not new_key and name in stored_keys():
+        store_key(name, "")
+        return True
+    return False
 
 
 def remove_server(name: str, settings: dict) -> str | None:

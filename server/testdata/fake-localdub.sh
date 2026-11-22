@@ -17,6 +17,33 @@ if [ "$1" = "languages" ]; then
   exit 0
 fi
 
+# `models ...`: the Models screen's command. A key must come on stdin ("sk-test"), never in the
+# arguments; the server `main` can't be removed.
+if [ "$1" = "models" ]; then
+  done='{"event": "result", "status": "done", "exit_code": 0}'
+  case " $* " in
+    *" --test "*)
+      echo "{\"event\": \"models_test\", \"task\": \"$3\", \"server\": \"main\", \"model\": \"m\", \"ok\": true, \"seconds\": 0.1, \"detail\": \"fine\", \"tok_per_s\": null, \"file\": \"/elsewhere/.models-test/voice.wav\"}"
+      echo "$done"; exit 0 ;;
+    *" --remove "*)
+      if [ "$3" = "main" ]; then
+        echo '{"event": "result", "status": "error", "exit_code": 1, "error": "the server main stays"}'; exit 1
+      fi
+      echo "$done"; exit 0 ;;
+    *" --key-stdin "*)
+      case " $* " in *sk-*) echo '{"event": "result", "status": "error", "exit_code": 1, "error": "a key in the arguments"}'; exit 1 ;; esac
+      read -r key
+      if [ "$key" != "sk-test" ]; then
+        echo '{"event": "result", "status": "error", "exit_code": 1, "error": "no key on stdin"}'; exit 1
+      fi
+      echo "$done"; exit 0 ;;
+    *" --set "*|*" --effort "*|*" --server "*)
+      echo "$done"; exit 0 ;;
+  esac
+  echo '{"event": "models", "servers": [{"name": "main", "url": "http://127.0.0.1:9876", "kind": "llama-swap", "key_set": true, "remote": false, "reachable": true, "models": [{"id": "gemma4-31b"}]}], "tasks": [{"task": "text", "server": "main", "model": "gemma4-31b"}], "efforts": {"translate": "medium"}}'
+  echo "$done"; exit 0
+fi
+
 # `voice <run>`: voice samples to compare, then it waits for a pick; `voice <run> --pick N`: picked
 if [ "$1" = "voice" ]; then
   echo "{\"event\": \"start\", \"command\": \"voice\", \"run\": \"$2\", \"channel\": \"c\", \"dir\": \"/tmp/runs/$2\"}"

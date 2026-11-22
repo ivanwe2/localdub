@@ -142,7 +142,7 @@ impl Job {
                 self.ended_ms = Some(now_ms());
             }
             Event::Call(call) => keep_last(&mut self.calls, call, KEEP_CALLS),
-            Event::Languages { .. } | Event::Other => {} // nothing a run's progress shows
+            Event::Languages { .. } | Event::Models(_) | Event::ModelsTest(_) | Event::Other => {} // nothing a run's progress shows
         };
     }
 

@@ -79,16 +79,18 @@ export function useNow(active: boolean, ms = 1000): number {
   return now;
 }
 
-/** The screens, from the address's #: "#/", "#/new", "#/review/market", "#/voices/market", "#/shorts/market". */
+/** The screens, from the address's #: "#/", "#/new", "#/models", "#/review/market", "#/voices/market", "#/shorts/market". */
 export type Route =
   | { page: "studio" }
   | { page: "new" }
+  | { page: "models" }
   | { page: "review" | "voices" | "shorts"; run: string | null };
 
 export function parseRoute(hash: string): Route {
   const [page, ...rest] = hash.replace(/^#\/?/, "").split("/");
   const run = rest.length ? decodeURIComponent(rest.join("/")) || null : null;
   if (page === "new") return { page: "new" };
+  if (page === "models") return { page: "models" };
   if (page === "review" || page === "voices" || page === "shorts") return { page, run };
   return { page: "studio" };
 }
@@ -96,6 +98,7 @@ export function parseRoute(hash: string): Route {
 export function routeHref(route: Route): string {
   if (route.page === "studio") return "#/";
   if (route.page === "new") return "#/new";
+  if (route.page === "models") return "#/models";
   return `#/${route.page}${route.run ? `/${encodeURIComponent(route.run)}` : ""}`;
 }
 

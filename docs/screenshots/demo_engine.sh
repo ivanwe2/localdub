@@ -2,6 +2,9 @@
 # A stand-in engine for the screenshots: `languages` answers at once; anything else voices
 # market-day-ep12's 16 made-up lines, one every 0.7 s, with the model calls and progress events the
 # real engine sends, then waits (the screenshot script stops it).
+if [ "$1" = "models" ]; then
+  exec python3 "$(dirname "$0")/demo_models.py" "$@"
+fi
 if [ "$1" = "languages" ]; then
   echo '{"event": "languages", "languages": [{"code": "bg", "name": "Bulgarian", "dub": false, "dictionary": "bg_BG", "dictionary_installed": true, "apt": "hunspell-bg"}, {"code": "en", "name": "English", "dub": true, "dictionary": "en_US", "dictionary_installed": true, "apt": "hunspell-en-us"}, {"code": "de", "name": "German", "dub": true, "dictionary": "de_DE", "dictionary_installed": true, "apt": "hunspell-de-de"}, {"code": "es", "name": "Spanish", "dub": true, "dictionary": "es_ES", "dictionary_installed": true, "apt": "hunspell-es"}]}'
   echo '{"event": "result", "status": "done", "exit_code": 0}'
