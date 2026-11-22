@@ -7,7 +7,7 @@
 #    installed with its install.sh, unless that build is installed already
 #
 # Everything is inside main(), so bash has read the whole script before step 1's git pull can
-# change this file.
+# change this file; after that step it starts again from the new copy, which does steps 2 and 3.
 set -euo pipefail
 
 main() {
@@ -16,8 +16,11 @@ main() {
   repo=${REPO:-https://github.com/ivanwe2/localdub}
   url=${LOCALDUB_APP_URL:-$repo/releases/download/app/localdub-app.tar.gz}
 
-  echo "== the engine"
-  bash "$here/install.sh"
+  if [ -z "${LOCALDUB_ENGINE_DONE:-}" ]; then
+    echo "== the engine"
+    bash "$here/install.sh"
+    LOCALDUB_ENGINE_DONE=1 exec bash "$here/update.sh" "$@"  # the pull may have changed this script
+  fi
 
   echo "== yt-dlp"
   bash "$here/server/yt-dlp.sh" || echo "note: yt-dlp couldn't be installed or updated; downloads from links may fail" >&2

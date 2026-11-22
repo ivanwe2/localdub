@@ -15,10 +15,17 @@ command -v fc-list >/dev/null && fc-list | grep -i "DejaVu Sans" >/dev/null || n
 command -v git >/dev/null || need+=(git)
 if [ ${#need[@]} -gt 0 ]; then apt-get update -q && apt-get install -y -q "${need[@]}"; fi
 
-if [ -d "$DIR" ] && [ ! -d "$DIR/.git" ]; then
-  mv "$DIR" "$DIR.old-$(date +%Y%m%d%H%M%S)"   # the copied 0.x install, before the repo existed
+# the code: a git pull (or the first clone), then this script starts again from the new copy. Bash
+# goes on reading the file it opened, so without the restart this run would finish the old version's
+# steps and a change here would only work one update later (Nov 22: the old steps installed only the
+# channels' dictionaries).
+if [ -z "${LOCALDUB_PULLED:-}" ]; then
+  if [ -d "$DIR" ] && [ ! -d "$DIR/.git" ]; then
+    mv "$DIR" "$DIR.old-$(date +%Y%m%d%H%M%S)"   # the copied 0.x install, before the repo existed
+  fi
+  if [ -d "$DIR/.git" ]; then git -C "$DIR" pull --ff-only; else git clone "$REPO" "$DIR"; fi
+  LOCALDUB_PULLED=1 exec bash "$DIR/deploy/install.sh" "$@"
 fi
-if [ -d "$DIR/.git" ]; then git -C "$DIR" pull --ff-only; else git clone "$REPO" "$DIR"; fi
 
 "$VENV/bin/pip" install -q -e "$DIR[voice]"
 ln -sf "$VENV/bin/localdub" /usr/local/bin/localdub
