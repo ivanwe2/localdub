@@ -7,12 +7,13 @@ const [base, out, work] = process.argv.slice(2);
 const browser = await chromium.launch();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function shot(name, hash, { theme = "dark", width = 1440, height = 900, full = true, wait = 1500 } = {}) {
+async function shot(name, hash, { theme = "dark", width = 1440, height = 900, full = true, wait = 1500, act } = {}) {
   const context = await browser.newContext({ viewport: { width, height }, colorScheme: theme });
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto(`${base}/${hash}`);
+  if (act) await act(page);
   await sleep(wait);
   await page.screenshot({ path: `${out}/${name}.png`, fullPage: full });
   console.log(name, errors.length ? `errors: ${errors.join(" | ")}` : "ok");
@@ -23,6 +24,8 @@ await shot("new-run", "#/new");
 await shot("review", "#/review/village-bakery");
 await shot("voices", "#/voices/market-day-ep12");
 await shot("shorts", "#/shorts/cheese-tour", { wait: 2500 });
+await shot("shorts-only", "#/shorts/saturday-clips", { wait: 2500 });
+await shot("new-run-shorts", "#/new", { act: (page) => page.getByRole("button", { name: "Shorts only" }).click() });
 
 // on air: the studio recorded while the demo engine voices its lines (one every 0.7 s)
 const size = { width: 1440, height: 680 };

@@ -53,7 +53,8 @@ const run = (over: Partial<RunSummary>): RunSummary => ({
   done: [],
   timings: {},
   finished: false,
-  files: { video: null, subtitles: [], shorts: [] },
+  mode: "dub",
+  files: { video: null, subtitles: [], shorts: [], original: null, source_video: null },
   waiting_for: null,
   ...over,
 });
@@ -118,13 +119,23 @@ describe("stage strips", () => {
     const failed = stageStrip(null, job({ state: "failed", current: "translate", done: ["prep"] }));
     expect(failed.find((s) => s.stage === "translate")?.cls).toBe("fail");
   });
+
+  it("a Shorts-only run: the transcript, then its Shorts (waiting for the pick, then done)", () => {
+    const checked = ["prep", "separate", "transcribe", "spelling", "review1"];
+    const picking = stageStrip(run({ mode: "shorts", done: checked, waiting_for: { kind: "shorts", lang: "original", file: "f" } }), null);
+    expect(picking.map((s) => s.stage)).toEqual([...checked, "shorts-original"]);
+    expect(picking.at(-1)).toMatchObject({ name: "Shorts, original", cls: "wait" });
+    const rendered = stageStrip(run({ mode: "shorts", done: checked, timings: { "shorts-original": 95 } }), null);
+    expect(rendered.at(-1)).toMatchObject({ cls: "done", note: "1:35" });
+    expect(runState(run({ mode: "shorts", waiting_for: { kind: "review1", lang: null, file: "r" } }), null).text).toBe("Your turn · the transcript");
+  });
 });
 
 describe("run states", () => {
   it("in words, for the runs list", () => {
     expect(runState(run({}), job({ current: "voice" }))).toEqual({ text: "On air · voice", cls: "air" });
     expect(runState(run({ waiting_for: { kind: "review2", lang: null, file: "r" } }), null).cls).toBe("wait");
-    expect(runState(run({ finished: true, files: { video: "v", subtitles: [], shorts: ["a", "b"] } }), null).text).toBe("Done · 2 Shorts");
+    expect(runState(run({ finished: true, files: { video: "v", subtitles: [], shorts: ["a", "b"], original: null, source_video: null } }), null).text).toBe("Done · 2 Shorts");
     expect(runState(run({ done: ["prep", "separate"] }), null)).toEqual({ text: "Stopped after separate", cls: "stop" });
     expect(runState(run({}), job({ state: "failed", error: "boom" })).cls).toBe("fail");
   });

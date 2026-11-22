@@ -65,6 +65,7 @@ export default function OnAir({ name, run, job, channels, busy, onChange, backTo
   useEffect(() => setWatching(false), [name]);
 
   const channel = channels.find((c) => c.name === run?.channel);
+  const shortsOnly = run?.mode === "shorts";
   const length = run?.seconds ?? wave?.seconds ?? segments.at(-1)?.end ?? 0;
   const strip = stageStrip(run, job, now);
   const p = running ? job?.progress : null;
@@ -140,7 +141,9 @@ export default function OnAir({ name, run, job, channels, busy, onChange, backTo
     status = (
       <div className="row">
         <span className="muted">
-          The dubbed video and its subtitles are ready{shorts ? `, and ${shorts} Short${shorts === 1 ? "" : "s"}` : ""}.
+          {shortsOnly
+            ? `${shorts} Short${shorts === 1 ? " is" : "s are"} ready, with captions in ${channel?.source_name ?? "the video's language"}.`
+            : `The dubbed video and its subtitles are ready${shorts ? `, and ${shorts} Short${shorts === 1 ? "" : "s"}` : ""}.`}
         </span>
         {video && (
           <button type="button" className="btn" aria-expanded={watching} onClick={() => setWatching(!watching)}>
@@ -175,9 +178,7 @@ export default function OnAir({ name, run, job, channels, busy, onChange, backTo
           <div className="row" style={{ gap: 8 }}>
             {run && <span className="chip">{run.channel}</span>}
             {channel && (
-              <span className="chip">
-                {channel.source_name} → {channel.target_name}
-              </span>
+              <span className="chip">{shortsOnly || !channel.target_name ? `${channel.source_name} · Shorts only` : `${channel.source_name} → ${channel.target_name}`}</span>
             )}
             {segments.length > 0 && <span className="chip">{segments.length} lines</span>}
           </div>
@@ -215,7 +216,8 @@ export default function OnAir({ name, run, job, channels, busy, onChange, backTo
           run={run}
           job={job}
           src={channel?.source.toUpperCase() ?? "SRC"}
-          tgt={channel?.target.toUpperCase() ?? "DUB"}
+          tgt={channel?.target?.toUpperCase() ?? "DUB"}
+          dub={!shortsOnly}
         />
       ) : (
         <p className="empty small">The timeline fills in once the speaker’s voice is separated and the video transcribed.</p>
@@ -244,9 +246,10 @@ type TimelineProps = {
   job: Job | null;
   src: string;
   tgt: string;
+  dub: boolean; // false for a Shorts-only run: no translation or dub tracks
 };
 
-function Timeline({ segments, length, wave, run, job, src, tgt }: TimelineProps) {
+function Timeline({ segments, length, wave, run, job, src, tgt, dub }: TimelineProps) {
   const laid = useMemo(() => clips(segments, length, run, job), [segments, length, run, job]);
   const speech = useMemo(() => (wave?.speech ? peaksPath(wave.speech) : ""), [wave]);
   const music = useMemo(() => (wave?.music ? peaksPath(wave.music) : ""), [wave]);
@@ -294,6 +297,8 @@ function Timeline({ segments, length, wave, run, job, src, tgt }: TimelineProps)
             ))}
           </div>
         </div>
+        {dub && (
+        <>
         <div className="track">
           <div className="track-label">
             TEXT<small>{tgt}</small>
@@ -318,6 +323,8 @@ function Timeline({ segments, length, wave, run, job, src, tgt }: TimelineProps)
             ))}
           </div>
         </div>
+        </>
+        )}
         <div className="track">
           <div className="track-label">
             MUSIC &amp; FX<small>kept as it is</small>

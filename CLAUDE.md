@@ -139,11 +139,15 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
    timings; GET …/waveform (#25). The page (`feat/ui-overhaul`): screens Studio / New run / Review /
    Voices / Shorts by `#/…`; reviews edited as structured lines (the file stays the truth, "Edit as
    text" shows it); Shorts cuts moved by whole sentences (the renderer reads `sentences A-B`); fonts
-   self-hosted (@fontsource); screenshots for checks: headless Chromium in the dev container's /tmp.
-   **Next, in this order**: CT 103 checkpoint for A, B and C together (ask first), UI overhaul
-   (mock-up first: dark studio look, animated sound-wave line background that "speaks" while a run
-   works, runs as editing-timeline tracks, timecode numbers, VU-meter tok/s, warm "on air" accent;
-   Ivan liked this concept). Token auth only if LAN use is wanted (until then: SSH tunnel). CT 103
+   self-hosted (@fontsource); screenshots: `docs/screenshots/shots.sh` (README images; `OUT=` for checks).
+   CT 103 test Nov 22 (13-min English video → German, ~35 min, translation ~20 min): "dub is good
+   and the shorts are actually fire". Plan of Nov 22 (approved): Shorts only → models from any server
+   per task (`localdub models`, Models screen) → guides (`docs/cli.md`, `localdub guide`, Agent
+   Skill). Shorts only (engine 0.12.0): `run --shorts-only` (state `mode: "shorts"`, stages up to
+   review 1 then `shorts-original`), channels may lack a dub language until their first dub,
+   RunSummary `mode` + `files.original`/`source_video` (served at `/videos/<file>`), the reviews
+   switch starts on for a new channel. **Next**: models from any server, then the guides, then a CT
+   103 checkpoint (ask first). Token auth only if LAN use is wanted (until then: SSH tunnel). CT 103
    is sometimes used for gaming: ask before running things there.
 5. App image (multi-stage) + docker compose; GPU-side services on CT 103.
 

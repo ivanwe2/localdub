@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { type Channel, continueRun, fileUrl, type Job, type RunSummary } from "../api";
+import { channelPair } from "../format";
 import { miniStrip, runState, timecode } from "../studio";
 import { ErrorText, message } from "./common";
 
@@ -93,6 +94,7 @@ function RunRow({ run, state, job, channel, focused, onFocus, busy, onChange }: 
   const kind = run.waiting_for?.kind;
   const onAir = job?.run === run.name && job.state === "running";
   const transcribed = run.done.includes("spelling");
+  const shortsOnly = run.mode === "shorts";
   const { video, subtitles, shorts } = run.files;
   const files = [...(video ? [video] : []), ...subtitles, ...shorts];
 
@@ -114,7 +116,8 @@ function RunRow({ run, state, job, channel, focused, onFocus, busy, onChange }: 
         </button>
         <div className="small muted">
           {run.channel}
-          {channel ? ` · ${channel.source.toUpperCase()} → ${channel.target.toUpperCase()}` : ""} · {new Date(run.created).toLocaleDateString()}
+          {channel ? ` · ${shortsOnly ? `${channel.source.toUpperCase()} · Shorts only` : channelPair(channel)}` : ""} ·{" "}
+          {new Date(run.created).toLocaleDateString()}
         </div>
       </div>
       <span className="mono muted" style={{ flex: "0 0 88px", fontSize: 14 }}>
@@ -160,7 +163,7 @@ function RunRow({ run, state, job, channel, focused, onFocus, busy, onChange }: 
             Shorts
           </a>
         )}
-        {transcribed && kind !== "voice" && (
+        {transcribed && kind !== "voice" && !shortsOnly && (
           <a className="btn small" href={`#/voices/${name}`}>
             Voices
           </a>

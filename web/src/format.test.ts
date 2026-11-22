@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { type Channel, fileUrl, type Job, type Language } from "./api";
 import {
   approve,
+  channelPair,
   defaultTarget,
   dictionaryNote,
   downloadText,
@@ -191,6 +192,15 @@ describe("a new channel's languages", () => {
     expect(languageFields("market", channels, "de", "es", "")).toEqual({ source: "de", target: "es" });
     expect(languageFields("market", channels, "de", "es", "woman")).toEqual({ source: "de", target: "es", speaker: "woman" });
     expect(findChannel("friend", channels)?.target_name).toBe("English");
+  });
+
+  it("Shorts only needs the video's language; a channel that made only Shorts gets its dub language once", () => {
+    const clips: Channel = { name: "clips", source: "de", target: null, source_name: "German", target_name: null, speaker: null, has_voice: false };
+    expect(languageFields("market", channels, "de", "es", "woman", true)).toEqual({ source: "de" });
+    expect(languageFields("clips", [clips], "", "en", "", true)).toEqual({});
+    expect(languageFields("clips", [clips], "", "en", "man")).toEqual({ target: "en", speaker: "man" });
+    expect(channelPair(clips)).toBe("DE · Shorts only");
+    expect(channelPair(channels[0])).toMatch(/^[A-Z]+ → [A-Z]+$/);
   });
 
   it("start with English as the dub language if the voice model speaks it", () => {
