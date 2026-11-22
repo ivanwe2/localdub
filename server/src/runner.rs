@@ -71,6 +71,9 @@ pub async fn run_process_with_input(
         })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        // if the caller stops waiting (a timeout, a dropped request), the program is stopped too,
+        // so nothing keeps running on the GPUs unseen
+        .kill_on_drop(true)
         .spawn()?;
     if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
         // a line is far smaller than the pipe's buffer, so this can't wait on the reading below;

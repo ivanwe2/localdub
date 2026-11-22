@@ -81,6 +81,21 @@ def test_a_key_is_stored_for_its_owner_only_and_never_shown(home, monkeypatch, c
         assert stat.S_IMODE((home / "keys.json").stat().st_mode) == 0o600
 
 
+def test_a_saved_key_never_follows_its_server_to_another_address(home, monkeypatch):
+    monkeypatch.setattr("sys.stdin", io.StringIO("sk-secret-123\n"))
+    assert main(["models", "--server", "cloud", "--url", "https://api.example.com", "--key-stdin"]) == 0
+
+    assert main(["models", "--server", "cloud", "--url", "https://api.example.com/v2"]) == 0  # same place
+    kept = models.stored_keys().get("cloud")
+    assert main(["models", "--server", "cloud", "--url", "https://elsewhere.example.net"]) == 0
+    forgotten = models.stored_keys().get("cloud")
+    monkeypatch.setattr("sys.stdin", io.StringIO("sk-new\n"))
+    assert main(["models", "--server", "cloud", "--url", "https://third.example.org", "--key-stdin"]) == 0
+
+    assert kept == "sk-secret-123" and forgotten is None
+    assert models.stored_keys().get("cloud") == "sk-new", "a new key with the move is kept"
+
+
 def test_remote_servers_are_told_from_local_ones():
     for url in ["http://localhost:9876", "http://127.0.0.1:8000", "http://192.168.0.71:9876", "http://10.1.2.3",
                 "http://gpu-box:9876", "http://gpu.lan", "http://studio.local:1234", "http://[::1]:9876",
