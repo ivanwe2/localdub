@@ -70,6 +70,33 @@ def test_automatic_run_with_shorts(fake_env, capsys):
     assert json.loads((run / "voice-candidates.json").read_text())["picked"] == other
 
 
+def test_shorts_only_run(fake_env, capsys):
+    """No dub: the transcript, then Shorts in the video's language, on a channel with no dub language."""
+    fake_env["use"]()
+    tts_log = fake_env["state"] / "tts.log"
+    voiced_before = tts_log.read_text(encoding="utf-8") if tts_log.exists() else ""
+    rc = main(["run", str(fake_env["video"]), "--channel", "clips", "--from", "bg", "--name", "clips",
+               "--shorts-only", "--no-review", "--shorts", "1", "--json"])
+    assert rc == 0
+    ev = events_of(capsys)
+    assert ev[0]["mode"] == "shorts"
+    assert ev[0]["stages"] == ["prep", "separate", "transcribe", "spelling", "review1", "shorts-original"]
+    assert [e["stage"] for e in ev if e["event"] == "stage" and e["status"] == "done"] == ev[0]["stages"]
+    result = ev[-1]
+    assert result["status"] == "done" and list(result["shorts"]) == ["original"] and "outputs" not in result
+    assert {e["kind"] for e in ev if e["event"] == "call"} == {"chat", "asr", "separation"}  # nothing voiced
+    assert (tts_log.read_text(encoding="utf-8") if tts_log.exists() else "") == voiced_before
+    run = fake_env["home"] / "runs" / "clips"
+    state = json.loads((run / "state.json").read_text())
+    assert state["mode"] == "shorts" and len(state["shorts"]["original"]) == 1
+    assert streams(state["shorts"]["original"][0]) == ["video", "audio"]
+    assert not (run / "voice-candidates.json").exists()
+    profile = json.loads((fake_env["home"] / "channels" / "clips" / "profile.json").read_text())
+    assert profile["source_lang"] == "bg" and profile["target_lang"] == "" and profile["voice_ref"] == ""
+    assert main(["shorts", "clips", "--lang", "dub"]) == 1  # there is no dub to cut from
+    assert "is Shorts only" in capsys.readouterr().err
+
+
 def test_reviewed_run_teaches_the_channel(fake_env, capsys):
     """Nemotron and Demucs run on this machine (the local backends), only the LLMs and TTS on the server."""
     fake_env["use"](nemo="local", demucs="local")

@@ -31,11 +31,13 @@ def label(code: str) -> str:
     return code.upper()
 
 
-def write_transcript_review(path: Path, segs: list[dict], report: dict, voice: dict | None, src: str) -> int:
-    """Review 1: the doubtful lines of the transcript, marked with the source language's code."""
+def write_transcript_review(path: Path, segs: list[dict], report: dict, voice: dict | None, src: str,
+                            captions: bool = False) -> int:
+    """Review 1: the doubtful lines of the transcript, marked with the source language's code. For a
+    Shorts-only run (`captions`) it's the only review, and the transcript becomes the captions."""
     lines = [
         "status: pending",
-        "# Review 1 of 2: the transcript.",
+        "# The transcript (the Shorts' captions are made from it)." if captions else "# Review 1 of 2: the transcript.",
         f"# Fix spelling in the {label(src)} lines below; keep the [id] lines as they are. Only lines with automatic",
         "# fixes, name suggestions or words the dictionary doesn't know are listed; the rest looked clean",
         "# (fixes this channel already learned from you are applied without asking).",

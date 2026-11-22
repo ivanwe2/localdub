@@ -78,6 +78,34 @@ def test_an_existing_channel_keeps_its_languages(home):
     assert isinstance(other, str) and "dubs de → es; for de → fr use another channel name" in other
 
 
+def test_a_shorts_only_channel_gets_its_dub_language_on_its_first_dub(home):
+    from localdub.run import channel_profile
+
+    made = channel_profile("clips", flags("de"), DEFAULT_SETTINGS, shorts_only=True)
+    again = channel_profile("clips", flags(), DEFAULT_SETTINGS, shorts_only=True)
+    no_dub_language = channel_profile("clips", flags(), DEFAULT_SETTINGS)
+    other_video_language = channel_profile("clips", flags("fr"), DEFAULT_SETTINGS, shorts_only=True)
+    dubbing = channel_profile("clips", flags(target="es"), DEFAULT_SETTINGS)
+    fixed_since = channel_profile("clips", flags(target="fr"), DEFAULT_SETTINGS)
+
+    assert not made.dubs and made["source_lang"] == "de" and made["hunspell_dict"] == "de_DE"
+    assert not again.dubs
+    assert isinstance(no_dub_language, str) and "made only Shorts so far: give its dub language once with --to" in no_dub_language
+    assert isinstance(other_video_language, str) and "is for German videos (de)" in other_video_language
+    assert dubbing.dubs and (dubbing["target_lang"], dubbing["target_language_name"]) == ("es", "Spanish")
+    assert Profile("clips")["target_lang"] == "es", "saved"
+    assert isinstance(fixed_since, str) and "dubs de → es" in fixed_since
+
+
+def test_a_new_dub_channel_still_needs_both_languages(home):
+    from localdub.run import channel_profile
+
+    result = channel_profile("market", flags("de"), DEFAULT_SETTINGS)
+
+    assert isinstance(result, str) and "Shorts only: --from alone" in result
+    assert not (home / "channels" / "market" / "profile.json").exists()
+
+
 def test_a_profile_from_before_languages_is_bulgarian_to_english(home):
     channel = home / "channels" / "old"
     channel.mkdir(parents=True)
