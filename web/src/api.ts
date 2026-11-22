@@ -387,6 +387,80 @@ function follow<T>(path: string, onValue: (value: T) => void): () => void {
   return () => events.close();
 }
 
+/** A model server and what it offers (`localdub models`, src/localdub/models.py overview). */
+export interface ModelServerInfo {
+  name: string;
+  url: string;
+  kind: string; // "llama-swap" or "openai"
+  key_set: boolean;
+  key_source: string | null; // "stored", or the environment variable it's read from
+  remote: boolean; // off this machine and its network: frames, transcripts and voice samples go there
+  reachable: boolean;
+  error: string | null;
+  models: { id: string; name: string | null; description: string | null }[];
+}
+
+/** One of the five tasks, the model doing it, and what it needs. */
+export interface TaskInfo {
+  task: string; // "text", "vision", "voice", "hearing", "separation"
+  title: string;
+  what: string;
+  used_by: string[];
+  needs: string;
+  examples: string[];
+  snippet: string; // the reference llama-swap.yaml entry for the default model
+  server: string;
+  model: string;
+  listed: boolean; // its server lists that model
+}
+
+export interface ModelsOverview {
+  servers: ModelServerInfo[];
+  tasks: TaskInfo[];
+  efforts: Record<string, string>; // spelling, translate, shorten, shorts → level
+  effort_levels: string[];
+  kinds: string[];
+}
+
+/** How trying a task went (POST /api/models/test). */
+export interface ModelTest {
+  task: string;
+  server: string;
+  model: string;
+  ok: boolean;
+  seconds: number;
+  detail: string;
+  tok_per_s: number | null;
+  file: string | null; // the voice test's clip, to play
+}
+
+export async function getModels(): Promise<ModelsOverview> {
+  return (await check(await fetch("/api/models"))).json();
+}
+
+function sendJson(method: string, url: string, body: unknown): Promise<Response> {
+  return fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(check);
+}
+
+/** Moves tasks to other models or servers, and changes the thinking levels. */
+export async function saveModels(change: { tasks?: Record<string, { server: string; model: string }>; efforts?: Record<string, string> }): Promise<void> {
+  await sendJson("PUT", "/api/models", change);
+}
+
+/** Adds or changes a server; `key` undefined keeps its key, "" removes it. */
+export async function saveModelServer(name: string, server: { url: string; kind: string; key?: string }): Promise<void> {
+  await sendJson("PUT", `/api/models/servers/${encodeURIComponent(name)}`, server);
+}
+
+export async function removeModelServer(name: string): Promise<void> {
+  await check(await fetch(`/api/models/servers/${encodeURIComponent(name)}`, { method: "DELETE" }));
+}
+
+/** Tries a task with one small real request (it may load the model: up to a few minutes). */
+export async function testModel(task: string): Promise<ModelTest> {
+  return (await sendJson("POST", "/api/models/test", { task })).json();
+}
+
 /** Where the browser fetches one of a run's files. */
 export function fileUrl(run: string, path: string): string {
   const parts = [run, ...path.split("/")].map(encodeURIComponent);

@@ -48,6 +48,7 @@ export default function Header({ job, status, route, runs, theme, onTheme }: Hea
     { label: "Review", route: { page: "review", run: t.review.run }, count: t.review.count },
     { label: "Voices", route: { page: "voices", run: t.voices.run }, count: t.voices.count },
     { label: "Shorts", route: { page: "shorts", run: t.shorts.run }, count: t.shorts.count },
+    { label: "Models", route: { page: "models" } },
   ];
   const models = status?.models.length ?? 0;
   const gpus = status?.gpus.length ?? 0;

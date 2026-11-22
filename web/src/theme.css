@@ -14,6 +14,7 @@
   --amber: #ffb547;
   --on-amber: #1a1206;
   --fail: #f2557a;
+  --ok: #8fd19a;
   --track: #1a1d21;
   --clip: #2e3238;
   --sans: "Inter", system-ui, sans-serif;
@@ -35,6 +36,7 @@
   --amber: #8a5a00;
   --on-amber: #ffffff;
   --fail: #b4234a;
+  --ok: #2b7a3d;
   --track: #f1ede6;
   --clip: #dcd5c9;
   color-scheme: light;
@@ -54,6 +56,7 @@
     --amber: #8a5a00;
     --on-amber: #ffffff;
     --fail: #b4234a;
+    --ok: #2b7a3d;
     --track: #f1ede6;
     --clip: #dcd5c9;
     color-scheme: light;
@@ -1820,4 +1823,107 @@ dl.details dd {
   .playhead {
     transition: none;
   }
+}
+
+/* --- Models ---------------------------------------------------------------------------------- */
+
+.ok-text {
+  color: var(--ok);
+}
+
+.warn-text {
+  color: var(--amber);
+}
+
+.model-card .panel-head .kicker {
+  text-align: right;
+}
+
+.thinking {
+  margin: 18px 0 0;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.thinking legend {
+  padding: 0 6px;
+}
+
+.test-result {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-left: 3px solid var(--ok);
+  background: var(--panel2);
+  border-radius: 0 8px 8px 0;
+}
+
+.test-result.fail {
+  border-left-color: var(--fail);
+}
+
+.test-result.ok strong {
+  color: var(--ok);
+}
+
+.test-result.fail strong {
+  color: var(--fail);
+}
+
+.test-result audio {
+  margin-top: 6px;
+  max-width: 100%;
+}
+
+.needs {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.needs summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.needs p {
+  margin: 10px 0 0;
+}
+
+.snippet {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-top: 10px;
+}
+
+.snippet pre {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-size: 12.5px;
+  line-height: 1.5;
+  background: var(--track);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.server-row {
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+
+.server-row:first-of-type {
+  border-top: 0;
+}
+
+.server-form {
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
 }

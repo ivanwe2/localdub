@@ -355,6 +355,9 @@ The API:
 | `POST /api/runs` | start one: `video`, `channel`, `name`, optional `no_review`, `shorts`, `shorts_only`; for a new channel also `source` and `target` (language codes; Shorts only: `source` alone) and optionally `speaker` (`man`/`woman`) |
 | `GET /api/channels` | every channel: the languages it dubs from and into, its speaker, whether it has a voice |
 | `GET /api/languages` | the languages localdub knows (`localdub languages`): which can be dubbed into, which dictionaries are installed |
+| `GET` / `PUT /api/models` | the servers, the model doing each task and what each needs, the thinking levels (`localdub models`); change them: `{"tasks": {"text": {"server": "main", "model": "…"}}, "efforts": {"translate": "low"}}` |
+| `PUT` / `DELETE /api/models/servers/<name>` | add or change a server: `{"url", "kind", "key"}` (the key goes to the engine on stdin and never comes back); remove one no task uses |
+| `POST /api/models/test`, `GET /api/models/test/voice.wav` | try a task with one small real request: `{"task": "voice"}` (not while a run is on air); the voice test's clip |
 | `GET` / `PUT /api/runs/<run>/review` | the file the run waits for: read it, save it (plain text) |
 | `POST /api/runs/<run>/continue` | go on after a review or an error, or render the picked Shorts |
 | `POST /api/runs/<run>/shorts` | propose Shorts for a finished run: `{"lang": "dub"}` or `"original"` |
