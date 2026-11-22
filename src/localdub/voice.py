@@ -172,9 +172,25 @@ def judge(script: str, heard: str, lang: str = "en") -> tuple[bool, float, str]:
 
 # --- voicing ----------------------------------------------------------------------------------------------
 
-def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedder=None, vp=None) -> list[dict]:
+def take_name(s: dict, ref_md5: str, seed: int) -> str:
+    """A take's file name: the line, a hash of its words and the voice sample (new words or another voice
+    get new takes, the same ones reuse theirs) and the seed."""
+    h = hashlib.md5((ref_md5 + s["tgt"]).encode()).hexdigest()[:8]
+    return f"{s['id']:04d}-{h}-s{seed}"
+
+
+def seeds_tried(run_dir: Path, s: dict, ref: Path) -> list[int]:
+    """The seeds of the takes already made of this line's words in this voice."""
+    prefix = take_name(s, hashlib.md5(ref.read_bytes()).hexdigest(), 0)[:-1]  # "0031-1a2b3c4d-s"
+    found = [p.stem[len(prefix):] for p in (run_dir / "voice" / "raw").glob(f"{prefix}*.wav")]
+    return sorted(int(n) for n in found if n.isdigit())
+
+
+def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedder=None, vp=None,
+              label: str = "voicing") -> list[dict]:
     """Voice every line. With a speaker model (`embedder`) and the speaker's voiceprint (`vp`), each line gets up to
-    settings["takes_per_line"] good takes and the one that sounds most like the speaker is kept."""
+    settings["takes_per_line"] good takes and the one that sounds most like the speaker is kept. `label` names
+    the work in the progress events ("re-voicing": one line fixed after the dub)."""
     work = run_dir / "voice"
     for d in ("raw", "trim", "fit"):
         (work / d).mkdir(parents=True, exist_ok=True)
@@ -184,10 +200,6 @@ def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedde
     ref_bytes = ref.read_bytes()
     ref_b64 = base64.b64encode(ref_bytes).decode()
     ref_md5 = hashlib.md5(ref_bytes).hexdigest()
-
-    def take_name(s, seed):
-        h = hashlib.md5((ref_md5 + s["tgt"]).encode()).hexdigest()[:8]
-        return f"{s['id']:04d}-{h}-s{seed}"
 
     for s in segs:
         s.pop("take", None)
@@ -219,7 +231,7 @@ def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedde
         check_dir.mkdir()
         new, to_check = 0, []
         for n, s in enumerate(pending, start=1):
-            name = take_name(s, seed)
+            name = take_name(s, ref_md5, seed)
             raw, trim = work / "raw" / f"{name}.wav", work / "trim" / f"{name}.wav"
             if not raw.exists():
                 raw.write_bytes(server.tts(s["tgt"], lang, ref_b64, seed,
@@ -229,7 +241,7 @@ def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedde
                 media.trim_silence(raw, trim, RATE)
                 media.ffmpeg("-i", trim, "-ac", "1", "-ar", 16000, "-c:a", "pcm_s16le", check_dir / f"{name}.wav")
                 to_check.append(name)
-            events.emit("progress", stage="voice", label=f"voicing, take {round_no}", done=n, total=len(pending),
+            events.emit("progress", stage="voice", label=f"{label}, take {round_no}", done=n, total=len(pending),
                         line=s["id"], at=s["start"])
         print(f"   take {round_no} (seed {seed}): {len(pending)} lines, {new} newly voiced in "
               f"{time.monotonic() - t0:.0f}s, checking {len(to_check)}", file=sys.stderr)
@@ -239,7 +251,7 @@ def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedde
             got = transcribe_folder(settings, server, check_dir, work / f"check-{round_no}-out", lang,
                                     nemo["check_device"])
             for s in pending:
-                name = take_name(s, seed)
+                name = take_name(s, ref_md5, seed)
                 if name in to_check:
                     checks[name] = {"heard": got.get(name, {}).get("text", ""),
                                     "dur": round(media.duration(work / "trim" / f"{name}.wav"), 3)}
@@ -250,7 +262,7 @@ def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedde
             checks_path.write_text(json.dumps(checks, ensure_ascii=False), encoding="utf-8")
         still, failed, longer = [], 0, 0
         for s in pending:
-            name = take_name(s, seed)
+            name = take_name(s, ref_md5, seed)
             c = checks[name]
             ok, w, why = judge(s["tgt"], c["heard"], lang)
             if want > 1 and "sim" not in c:  # checked before similarity was on

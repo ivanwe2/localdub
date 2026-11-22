@@ -33,6 +33,11 @@ reachable, the models they list), the tasks (server, model, what they need) and 
   {"event": "models_test", "task": "voice", "server": "main", "model": "qwen3-tts", "ok": true,
    "seconds": 2.1, "detail": "said \"…\" (4.2 s)", "tok_per_s": null, "file": ".../.models-test/voice.wav"}
 
+`localdub line RUN ID --json` without changes sends one "line" event (id, start, end, src, tgt, placed,
+seconds, passed, why, heard, fit, shortened_from, fixed); fixing it is a job like a run, with
+stages voice, mix (and shorts-dub when dubbed Shorts have the line) and its progress labelled
+"re-voicing, take N".
+
 Stages that work line by line also report how far they are, with the line's place in the video
 (`at`, seconds), so a reader can move a playhead:
   {"event": "progress", "stage": "translate", "label": "translating", "done": 20, "total": 58, "line": 20, "at": 61.2}

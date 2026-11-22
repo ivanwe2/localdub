@@ -1,10 +1,12 @@
 """Whole runs against the fake servers: the automatic path, and the reviewed path that teaches the channel."""
 import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from localdub.run import main
+from localdub.shorts import read_candidates
 
 pytestmark = pytest.mark.slow
 
@@ -55,6 +57,32 @@ def test_automatic_run_with_shorts(fake_env, capsys):
     heard = (fake_env["state"] / "asr-http.log").read_text(encoding="utf-8").split()
     assert "part00.wav" in heard and any("-s42.wav" in f for f in heard)  # transcription and take checks, over HTTP
     assert (run / "vocals.wav").exists() and (run / "music.wav").exists()  # separated through the Demucs wrapper
+
+    # a line fixed after the dub: new words, voiced and mixed again, the dubbed Short with it rendered again
+    _, picked = read_candidates(run / "shorts" / "dub" / "candidates.txt")
+    line, short = picked[0]["start"], Path(state["shorts"]["dub"][0])
+    rendered, mixed = short.stat().st_mtime_ns, (run / "auto.en.mp4").stat().st_mtime_ns
+    new = "A brand new line for the market."
+    assert main(["line", "auto", str(line), "--text", new, "--json"]) == 0
+    ev = events_of(capsys)
+    assert ev[0]["command"] == "line" and ev[0]["stages"] == ["voice", "mix", "shorts-dub"]
+    assert [e["stage"] for e in ev if e["event"] == "stage" and e["status"] == "done"] == ev[0]["stages"]
+    tts = [e for e in ev if e["event"] == "call" and e["kind"] == "tts"]
+    assert tts and all(c["label"].startswith(f"line {line}, ") for c in tts)  # only this line is voiced
+    assert ev[-1]["line"]["tgt"] == new and ev[-1]["line"]["fixed"] and ev[-1]["shorts"]["dub"] == [str(short)]
+    fixed = next(s for s in json.loads((run / "segments.json").read_text()) if s["id"] == line)
+    assert fixed["tgt"] == new and fixed["take"]["ok"] and fixed["fixed"]
+    assert short.stat().st_mtime_ns > rendered and (run / "auto.en.mp4").stat().st_mtime_ns > mixed
+    memory = (fake_env["home"] / "channels" / "auto" / "memory.jsonl").read_text(encoding="utf-8")
+    assert new in memory  # the channel learns from a fix, as from review 2
+    assert main(["line", "auto", str(line), "--text", new]) == 1, "it says that already"
+    assert main(["line", "auto", str(line), "--new-take", "--json"]) == 0  # the same words, new seeds
+    assert any("-s1235.wav" in f.name for f in (run / "voice" / "raw").glob(f"{line:04d}-*"))
+    assert [e for e in events_of(capsys) if e["event"] == "start"][0]["stages"] == ["voice", "mix", "shorts-dub"]
+    assert main(["line", "auto", str(line), "--json"]) == 0  # only shows it
+    shown = events_of(capsys)
+    assert shown[0]["event"] == "line" and shown[0]["tgt"] == new and shown[0]["passed"]
+    assert main(["line", "auto", "9999"]) == 1
 
     # later: compare voice samples from this run with the channel's voice now, and pick another one
     assert main(["voice", "auto", "--json"]) == 3

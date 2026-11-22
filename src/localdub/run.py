@@ -34,7 +34,7 @@ from .mix import mix, mux, place, subtitles
 from .settings import Profile, home, load_settings
 from .text import (Speller, _is_name, build_segments, core, replace_words, shorten_to, spellcheck, text_of,
                    translate)
-from .voice import RATE, cut_voice, voice_all, voice_candidates
+from .voice import RATE, cut_voice, seeds_tried, voice_all, voice_candidates
 
 WAIT = "wait"
 
@@ -560,18 +560,15 @@ def stage_review2(run: Run, ctx: Ctx):
         f"{len(parsed['glossary'])} glossary terms for this channel")
 
 
-def stage_voice(run: Run, ctx: Ctx):
-    segs = run.segs
-    for s in segs:  # a redo starts from the translated text, not from an earlier automatic shortening
-        if s.get("shortened_from"):
-            s["tgt"] = s.pop("shortened_from")
+def voicing(run: Run, ctx: Ctx, segs: list[dict]):
+    """Ready to voice: the GPUs freed for a check on this machine, and with takes to compare, the speaker
+    model and the speaker's voiceprint (None, None without them)."""
     if local(ctx, "nemo"):  # the voice clone stays on the server (GPU 0), the check runs here (GPU 1)
         ctx.server.unload_all(keep_task="voice")
         log(f"   {ctx.settings['tts_model']} on the model server, checking each take with Nemotron on "
             f"{ctx.settings['nemo']['check_device']}")
     else:  # llama-swap runs both side by side (its "voicing" group)
         log(f"   {ctx.settings['tts_model']}, checking each take with {ctx.settings['asr_model']} (both on the model server)")
-    lang = ctx.profile["target_lang"]
     embedder = vp = None
     if ctx.settings.get("takes_per_line", 1) > 1:
         from .speaker import get_embedder
@@ -579,6 +576,16 @@ def stage_voice(run: Run, ctx: Ctx):
         vp = run_voiceprint(run, embedder, segs) if embedder is not None else None
         if vp is not None:
             log(f"   comparing up to {ctx.settings['takes_per_line']} good takes per line by how much they sound like the speaker")
+    return embedder, vp
+
+
+def stage_voice(run: Run, ctx: Ctx):
+    segs = run.segs
+    for s in segs:  # a redo starts from the translated text, not from an earlier automatic shortening
+        if s.get("shortened_from"):
+            s["tgt"] = s.pop("shortened_from")
+    lang = ctx.profile["target_lang"]
+    embedder, vp = voicing(run, ctx, segs)
     report = voice_all(segs, run.dir, ctx.server, ctx.settings, ctx.profile, lang, embedder, vp)
     over = [s for s in segs if s.get("take") and s["take"]["ok"] and "OVER" in s["take"]["fit"]]
     if over and ctx.settings["auto_shorten"]:
@@ -1075,21 +1082,45 @@ def make_shorts(run: Run, settings: dict, lang: str, auto: int = 0, redo: str | 
         log("   Mark the ones to render with [x], set 'status: approved', save, then run:")
         log(f"   {rerun}")
         return 3
+    try:
+        made = render_shorts(run, settings, lang, picked, language)
+    except (media.ToolError, RuntimeError) as e:
+        return fail(str(e), stage=f"shorts-{lang}")
+    run.state.setdefault("shorts", {})[lang] = made
+    run.save()
+    return 0
+
+
+def render_shorts(run: Run, settings: dict, lang: str, picked: list[dict], language: str) -> list[str]:
+    """Render these picked Shorts (each replaces its earlier file); their paths."""
+    from . import shorts as sh
+    out_dir = run.p("shorts") / lang
     video = Path(run.state["video"] if lang == "original" else run.state["outputs"]["video"])
+    segs = run.segs
     log(f"   rendering {len(picked)} {language} Shorts from {video.name}")
     made = []
     for pick in picked:
         out = out_dir / f"short-{pick['n']}-{sh.slug(pick['title'])}.mp4"
         t0 = time.monotonic()
-        try:
-            sh.render(video, segs, pick, out, out_dir, settings["shorts"]["title"], lang)
-        except (media.ToolError, RuntimeError) as e:
-            return fail(str(e), stage=f"shorts-{lang}")
+        sh.render(video, segs, pick, out, out_dir, settings["shorts"]["title"], lang)
         made.append(str(out))
         log(f"   {out.name}: {media.duration(out):.0f}s, rendered in {time.monotonic() - t0:.0f}s")
-    run.state.setdefault("shorts", {})[lang] = made
-    run.save()
-    return 0
+    return made
+
+
+def shorts_with_line(run: Run, line: int) -> list[dict]:
+    """The rendered dub Shorts this line is in (picked in shorts/dub/candidates.txt)."""
+    from . import shorts as sh
+    cand_txt = run.p("shorts") / "dub" / "candidates.txt"
+    if not run.state.get("shorts", {}).get("dub") or not cand_txt.exists():
+        return []
+    status, picked = sh.read_candidates(cand_txt)
+    if status != "approved":
+        return []
+    order = [s["id"] for s in run.segs]
+    at = order.index(line)
+    return [p for p in picked if p["start"] in order and p["end"] in order
+            and order.index(p["start"]) <= at <= order.index(p["end"])]
 
 
 def cmd_shorts(args) -> int:
@@ -1158,6 +1189,120 @@ def cmd_voice(args) -> int:
     log(f"\n== Listen and compare: {run.p('voice-candidates')}")
     log(f"   then: localdub voice {run.name} --pick N (or current, or a stretch like 01:20-01:38)")
     return 3
+
+
+def line_info(s: dict) -> dict:
+    """One line of a dub, as the `line` event shows it."""
+    t = s.get("take") or {}
+    return {"id": s["id"], "start": s["start"], "end": s["end"], "src": s.get("src", ""), "tgt": s.get("tgt", ""),
+            "placed": s.get("placed"), "seconds": t.get("seconds"), "passed": t.get("ok"), "why": t.get("why") or None,
+            "heard": t.get("heard"), "fit": t.get("fit"), "shortened_from": s.get("shortened_from"),
+            "fixed": bool(s.get("fixed"))}
+
+
+def cmd_line(args) -> int:
+    """`localdub line RUN ID`: one line of a finished dub, to fix it without redoing the rest. `--text` gives it new
+    words (empty: the line stays silent), `--new-take` voices the same words again with new seeds. Either way the
+    line is voiced and checked as usual, the dub is mixed again, and the dubbed Shorts it is in are rendered again."""
+    run = Run(args.name)
+    events.note(run=run.name, dir=str(run.dir))
+    st = run.state
+    if not st:
+        return fail(f"no run called '{args.name}' in {home() / 'runs'}")
+    if st.get("mode") == "shorts":
+        return fail(f"run '{run.name}' is Shorts only: it has no dub")
+    if "mix" not in st.get("done", []):
+        return fail(f"run '{run.name}' isn't dubbed yet (localdub run {run.name}); lines are fixed after the dub")
+    segs = run.segs
+    s = next((x for x in segs if x["id"] == args.id), None)
+    if s is None:
+        return fail(f"run '{run.name}' has no line {args.id} (its lines: {segs[0]['id']}-{segs[-1]['id']})")
+    text = sys.stdin.readline() if args.text_stdin else args.text
+    text = " ".join(text.split()) if text is not None else None  # one line
+    profile = Profile(st["channel"])
+    tgt_l = profile["target_lang"]
+    if text is None and not args.new_take:  # just show it
+        info = line_info(s)
+        events.emit("line", run=run.name, **info)
+        placed = f", dub at {media.mmss(info['placed'])} for {info['seconds']:.1f}s" if info["seconds"] else ""
+        log(f"line {s['id']} of '{run.name}': {media.mmss(s['start'])}-{media.mmss(s['end'])}{placed}")
+        log(f"{review.label(profile['source_lang'])} {info['src']}")
+        log(f"{review.label(tgt_l)} {info['tgt']}")
+        if info["passed"] is not None:
+            log(f"check: {'passed' if info['passed'] else 'failed (' + str(info['why']) + ')'}, "
+                f"heard \"{info['heard']}\"; {info['fit']}")
+        log(f"fix it: localdub line {run.name} {s['id']} --text \"...\"  (or --new-take)")
+        return 0
+    remix_only = st.get("mix_pending") and (text is None or text == s.get("tgt", "")) and not args.new_take
+    if text is not None and text == s.get("tgt", "") and not args.new_take and not remix_only:
+        return fail(f"line {s['id']} says that already; for another take of it: --new-take")
+    settings = load_settings()
+    ctx = Ctx(settings, profile, Models(settings), True, f"localdub line {run.name} {s['id']}")
+    redo = shorts_with_line(run, s["id"])
+    steps = [] if remix_only else [("voice", f"voice line {s['id']} again, checking each take")]
+    steps += [("mix", "mix over the music, write the video and subtitles")]
+    steps += [("shorts-dub", f"render the {len(redo)} dubbed Shorts with this line again")] if redo else []
+    events.emit("start", command="line", run=run.name, channel=st["channel"], dir=str(run.dir), mode="dub",
+                stages=[name for name, _ in steps], done=[], line=s["id"])
+    log(f"localdub: line {s['id']} of '{run.name}' ({media.mmss(s['start'])})")
+
+    def voice_line():
+        if text is not None and text != s.get("tgt", ""):
+            log(f"   was: {s.get('tgt', '')}\n   now: {text or '(silent)'}")
+            if text:  # the channel learns from it, as from review 2
+                profile.remember([{"src": s["src"], "tgt": text, "model_tgt": s.get("model_tgt", s.get("tgt", "")),
+                                   "edited": True, "video": run.name, "date": dt.date.today().isoformat()}])
+            s["tgt"] = text
+            s.pop("shortened_from", None)
+        if args.new_take and profile.voice_path and profile.voice_path.exists():
+            tried = seeds_tried(run.dir, s, profile.voice_path)
+            first = max(tried + settings["seeds"]) + 1
+            ctx.settings = {**settings, "seeds": list(range(first, first + len(settings["seeds"])))}
+            log(f"   new takes, seeds {ctx.settings['seeds'][0]}-{ctx.settings['seeds'][-1]}")
+        embedder, vp = voicing(run, ctx, segs)
+        report = voice_all([s], run.dir, ctx.server, ctx.settings, profile, tgt_l, embedder, vp, label="re-voicing")
+        s["fixed"] = True
+        path = run.p("voice.json")
+        old = read_json(path) if path.exists() else []
+        write_json(path, sorted([r for r in old if r["id"] != s["id"]] + report, key=lambda r: r["id"]))
+        t = s.get("take")
+        if not t:
+            log("   no words: the line is left silent")
+        else:
+            log(f"   {'passed' if t['ok'] else 'failed (' + t['why'] + ')'} the check after {t['tries']} "
+                f"take{'s' if t['tries'] > 1 else ''}, heard \"{t['heard']}\"; {t['fit']}")
+        run.segs = segs
+        st["mix_pending"] = True  # if the mix fails, the same command mixes again
+        run.save()
+
+    def mix_again():
+        ctx.settings = settings
+        stage_mix(run, ctx)
+        st.pop("mix_pending", None)
+        run.save()
+
+    made = []
+
+    def shorts_again():
+        made.extend(render_shorts(run, settings, "dub", redo, profile["target_language_name"]))
+
+    work = {"voice": voice_line, "mix": mix_again, "shorts-dub": shorts_again}
+    for name, what in steps:
+        log(f"\n== {name}: {what}")
+        events.emit("stage", stage=name, status="started")
+        t0 = time.monotonic()
+        try:
+            work[name]()
+        except (media.ToolError, LLMError, RuntimeError, OSError) as e:
+            log(f"Fix the cause, then run the same command again: {ctx.rerun}")
+            return fail(f"in stage '{name}': {e}", stage=name)
+        events.emit("stage", stage=name, status="done", seconds=round(time.monotonic() - t0, 1))
+    events.note(line=line_info(s), outputs=st["outputs"], shorts={"dub": made} if made else {})
+    log("\n== done")
+    log(f"   video:      {st['outputs']['video']}")
+    for f in made:
+        log(f"   Short:      {f}")
+    return 0
 
 
 def channel_names() -> list[str]:
@@ -1285,6 +1430,15 @@ def main(argv=None) -> int:
     v.add_argument("--pick", metavar="CHOICE",
                    help="make this the channel's voice: a candidate's number, 'current' (keep it), a stretch "
                         "of the run's video (01:20-01:38) or a WAV file")
+    li = sub.add_parser("line", parents=[common],
+                        help="show one line of a finished dub, or fix it (new words or another take); the dub and "
+                             "the dubbed Shorts with it are made again")
+    li.add_argument("name", help="the run's name (a finished dub)")
+    li.add_argument("id", type=int, help="the line's number, as in the reviews and check.txt")
+    words = li.add_mutually_exclusive_group()
+    words.add_argument("--text", help="the line's new words in the dub language (\"\" leaves the line silent)")
+    words.add_argument("--text-stdin", action="store_true", help="read the new words from stdin (one line)")
+    li.add_argument("--new-take", action="store_true", help="voice the line again with new seeds")
     sub.add_parser("check", parents=[common], help="check that the tools, models and server are in place")
     sub.add_parser("guide", parents=[common], help="the guide for AI agents driving localdub: the loop, files, events")
     from .models import EFFORT_LEVELS, EFFORTS, KINDS, TASKS
@@ -1312,7 +1466,8 @@ def main(argv=None) -> int:
     events.configure(args.json)
     try:
         commands = {"run": cmd_run, "shorts": cmd_shorts, "voice": cmd_voice, "check": cmd_check,
-                    "models": cmd_models, "guide": cmd_guide, "channel": cmd_channel, "languages": cmd_languages}
+                    "models": cmd_models, "guide": cmd_guide, "channel": cmd_channel, "languages": cmd_languages,
+                    "line": cmd_line}
         rc = commands[args.cmd](args)
     except Exception as e:  # a bug, not a handled error: still end the event stream with a result
         events.note(error=f"{type(e).__name__}: {e}")
