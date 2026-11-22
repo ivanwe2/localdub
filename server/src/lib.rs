@@ -654,6 +654,7 @@ async fn job_events(
 ///   uploads, downloads, the job, the models' and GPUs' status
 /// - `/files/<run>/<path>` a run's files, e.g. the dubbed video (ServeDir also answers range
 ///   requests, so the browser can seek in a video, and never serves anything outside runs/)
+/// - `/videos/<file>` the uploaded and downloaded videos, for previews of the original
 /// - everything else: the web UI, with index.html for any path it doesn't have
 pub fn app(state: AppState) -> Router {
     let api = Router::new()
@@ -685,7 +686,8 @@ pub fn app(state: AppState) -> Router {
         .route("/status/events", get(status_events));
     let mut router = Router::new()
         .nest("/api", api)
-        .nest_service("/files", ServeDir::new(state.home.join("runs")));
+        .nest_service("/files", ServeDir::new(state.home.join("runs")))
+        .nest_service("/videos", ServeDir::new(state.home.join("videos")));
     if let Some(web) = &state.web {
         let index = ServeFile::new(web.join("index.html"));
         router = router.fallback_service(ServeDir::new(web).fallback(index));

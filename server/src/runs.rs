@@ -65,6 +65,10 @@ pub struct RunFiles {
     pub subtitles: Vec<String>,
     /// The rendered Shorts, in both languages.
     pub shorts: Vec<String>,
+    /// The video the run was made from, for previews: inside the run's folder (an excerpt)...
+    pub original: Option<String>,
+    /// ...or a file in the home's videos folder, which the server serves at `/videos/<file>`.
+    pub source_video: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
@@ -80,6 +84,8 @@ struct StateFile {
     timings: BTreeMap<String, f64>,
     #[serde(default)]
     outputs: Outputs,
+    /// The video the run works from (the source, or its excerpt in the run's folder), once prepped.
+    video: Option<String>,
     /// Language ("dub" / "original") → the Shorts' paths.
     #[serde(default)]
     shorts: BTreeMap<String, Vec<String>>,
@@ -178,6 +184,11 @@ async fn read_summary(dir: &Path, name: String) -> std::io::Result<Option<RunSum
             .flatten()
             .filter_map(in_this_run)
             .collect(),
+        original: state.video.as_ref().and_then(in_this_run),
+        source_video: match &state.video {
+            Some(video) if in_this_run(video).is_none() => in_videos_folder(dir, video).await,
+            _ => None,
+        },
     };
     Ok(Some(RunSummary {
         name,
@@ -235,6 +246,18 @@ async fn waiting_for(dir: &Path, state: &StateFile, finished: bool) -> Option<Wa
         }
     }
     None
+}
+
+/// The file name of `video` if it is in the videos folder of the home that `run_dir` is in.
+async fn in_videos_folder(run_dir: &Path, video: &str) -> Option<String> {
+    let videos = tokio::fs::canonicalize(run_dir.parent()?.parent()?.join("videos"))
+        .await
+        .ok()?;
+    let video = tokio::fs::canonicalize(video).await.ok()?;
+    if video.parent()? != videos {
+        return None;
+    }
+    Some(video.file_name()?.to_string_lossy().into_owned())
 }
 
 async fn exists(path: &Path) -> bool {
@@ -485,6 +508,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_video_a_run_was_made_from_is_found_for_previews() {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir_all(home.path().join("videos")).unwrap();
+        let source = home.path().join("videos").join("talk.mp4");
+        fs::write(&source, "video").unwrap();
+        let elsewhere = tempfile::NamedTempFile::new().unwrap();
+        let state = |video: &str| {
+            format!(
+                r#"{{"source": "x", "channel": "c", "created": "2026-11-22T10:00:00", "done": ["prep"],
+                    "video": {video:?}}}"#
+            )
+        };
+        write_run(home.path(), "whole", &state(source.to_str().unwrap()));
+        let excerpt = home.path().join("runs").join("part").join("video.mp4");
+        write_run(home.path(), "part", &state(excerpt.to_str().unwrap()));
+        write_run(
+            home.path(),
+            "outside",
+            &state(elsewhere.path().to_str().unwrap()),
+        );
+
+        let files = |name: &'static str| {
+            let home = home.path().to_path_buf();
+            async move { read_run(&home, name).await.unwrap().unwrap().files }
+        };
+
+        let whole = files("whole").await;
+        assert_eq!(
+            (whole.original, whole.source_video.as_deref()),
+            (None, Some("talk.mp4"))
+        );
+        assert_eq!(files("part").await.original.as_deref(), Some("video.mp4"));
+        let outside = files("outside").await;
+        assert_eq!((outside.original, outside.source_video), (None, None));
+    }
+
+    #[tokio::test]
     async fn reading_a_run_that_does_not_exist_gives_none() {
         let home = tempfile::tempdir().unwrap();
 
@@ -514,6 +574,7 @@ mod tests {
                 video: Some("market.en.mp4".into()),
                 subtitles: strings(&["market.en.srt", "market.bg.srt"]),
                 shorts: strings(&["shorts/dub/short-2-b.mp4", "shorts/original/short-1-a.mp4"]),
+                ..RunFiles::default()
             },
             "a path outside the run's folder is left out"
         );
