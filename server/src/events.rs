@@ -45,6 +45,12 @@ pub enum Event {
     },
     /// `localdub languages`: every language the engine knows.
     Languages { languages: Vec<Language> },
+    /// `localdub models`: the servers, the task each model does, the thinking levels. Passed on to
+    /// the page as it is (its shape is the engine's, models.overview).
+    Models(serde_json::Map<String, serde_json::Value>),
+    /// `localdub models --test TASK`: how trying a task went.
+    #[serde(rename = "models_test")]
+    ModelsTest(serde_json::Map<String, serde_json::Value>),
     /// How far a stage that works line by line is (translate, voice).
     Progress(Progress),
     #[serde(other)]

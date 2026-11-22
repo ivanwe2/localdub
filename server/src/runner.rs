@@ -5,7 +5,7 @@
 
 use std::process::Stdio;
 
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
 use crate::events::{Event, parse_line};
@@ -17,6 +17,18 @@ use crate::events::{Event, parse_line};
 pub async fn run_engine(
     program: &str,
     args: &[String],
+    on_event: impl FnMut(Event),
+    on_log: impl FnMut(String),
+) -> std::io::Result<i32> {
+    run_engine_with_input(program, args, None, on_event, on_log).await
+}
+
+/// The same, with `input` written to the engine's stdin (an API key: never on a command line,
+/// where other users of the machine could see it in the process list).
+pub async fn run_engine_with_input(
+    program: &str,
+    args: &[String],
+    input: Option<String>,
     mut on_event: impl FnMut(Event),
     on_log: impl FnMut(String),
 ) -> std::io::Result<i32> {
@@ -27,7 +39,7 @@ pub async fn run_engine(
             on_event(event);
         }
     };
-    run_process(program, &all_args, on_line, on_log).await
+    run_process_with_input(program, &all_args, input, on_line, on_log).await
 }
 
 /// Runs `program` with `args`, calls `on_out` for every line on stdout and `on_err` for every
@@ -36,15 +48,35 @@ pub async fn run_engine(
 pub async fn run_process(
     program: &str,
     args: &[String],
+    on_out: impl FnMut(String),
+    on_err: impl FnMut(String),
+) -> std::io::Result<i32> {
+    run_process_with_input(program, args, None, on_out, on_err).await
+}
+
+/// The same, with `input` (one line) on its stdin; without it, stdin is empty.
+pub async fn run_process_with_input(
+    program: &str,
+    args: &[String],
+    input: Option<String>,
     mut on_out: impl FnMut(String),
     mut on_err: impl FnMut(String),
 ) -> std::io::Result<i32> {
     let mut child = Command::new(program)
         .args(args)
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
+    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+        // a line is far smaller than the pipe's buffer, so this can't wait on the reading below;
+        // dropping `stdin` closes it, so the program sees the end of its input
+        stdin.write_all(format!("{input}\n").as_bytes()).await?;
+    }
     let mut out = BufReader::new(child.stdout.take().expect("stdout is piped")).split(b'\n');
     let mut err = BufReader::new(child.stderr.take().expect("stderr is piped")).split(b'\n');
     let text = |bytes: Vec<u8>| {
