@@ -16,6 +16,14 @@ export function timecode(seconds: number, short = false): string {
 /** The pipeline's stages, in order, and how the page names them. */
 export const STAGES = ["prep", "separate", "transcribe", "spelling", "review1", "translate", "review2", "voice", "mix"];
 
+/** A Shorts-only run's stages: the transcript, then its Shorts in the video's language. */
+export const SHORTS_STAGES = [...STAGES.slice(0, STAGES.indexOf("review1") + 1), "shorts-original"];
+
+/** The stages of a run on disk, by its mode. */
+export function runStages(run: { mode?: string } | null): string[] {
+  return run?.mode === "shorts" ? SHORTS_STAGES : STAGES;
+}
+
 export function stageName(stage: string): string {
   return stage.replace(/^review(\d)$/, "review $1").replace(/^shorts-/, "Shorts, ");
 }
@@ -23,6 +31,7 @@ export function stageName(stage: string): string {
 /** How much room a stage gets in a strip (roughly how long it takes; never too thin to read). */
 const GROW: Record<string, number> = {
   prep: 1, separate: 2, transcribe: 2, spelling: 2, review1: 1.5, translate: 3, review2: 1.5, voice: 5, mix: 1,
+  "shorts-original": 3, "shorts-dub": 3,
 };
 
 export type StageCls = "done" | "you" | "now" | "wait" | "todo" | "fail";
@@ -39,17 +48,24 @@ export interface StageItem {
  * The stage strip of a run: what's done (with its time; a review: "approved"), what runs now or
  * waits for you, and what's next. `job` is the server's job when it is about this run.
  */
-export function stageStrip(run: Pick<RunSummary, "done" | "timings" | "waiting_for"> | null, job: Job | null, now = Date.now()): StageItem[] {
-  const stages = job && job.stages.length ? job.stages : STAGES;
+export function stageStrip(
+  run: (Pick<RunSummary, "done" | "timings" | "waiting_for"> & { mode?: string }) | null,
+  job: Job | null,
+  now = Date.now(),
+): StageItem[] {
+  const stages = job && job.stages.length ? job.stages : runStages(run);
   const done = new Set([...(run?.done ?? []), ...(job?.done ?? [])]);
   const timings = { ...(run?.timings ?? {}), ...(job?.timings ?? {}) };
   const current = job?.current ?? null;
   const waitingKind = job?.state === "waiting" ? job.waiting_for?.kind : run?.waiting_for?.kind;
+  // the stage that waits: a review by its name; Shorts by their language ("shorts-original")
+  const waitingStage = waitingKind === "shorts" ? `shorts-${run?.waiting_for?.lang ?? "original"}` : waitingKind;
   return stages.map((stage) => {
     const review = stage.startsWith("review");
+    const shorts = stage.startsWith("shorts-");
     let cls: StageCls = "todo";
     let note = "";
-    if (done.has(stage)) {
+    if (done.has(stage) || (shorts && timings[stage] != null)) {
       cls = review ? "you" : "done";
       note = review ? "approved" : timings[stage] != null ? clock(timings[stage]) : "";
     } else if (stage === current && job?.state === "running") {
@@ -59,7 +75,7 @@ export function stageStrip(run: Pick<RunSummary, "done" | "timings" | "waiting_f
     } else if (stage === current && job?.state === "failed") {
       cls = "fail";
       note = "stopped here";
-    } else if ((stage === current && job?.state === "waiting") || (!current && waitingKind === stage)) {
+    } else if ((stage === current && job?.state === "waiting") || (!current && waitingStage === stage)) {
       cls = "wait";
       note = "your turn";
     }
@@ -90,6 +106,7 @@ export function runState(run: RunSummary, job: Job | null): { text: string; cls:
   const mine = job?.run === run.name ? job : null;
   if (mine?.state === "running") return { text: `On air · ${stageName(mine.current ?? "starting")}`, cls: "air" };
   if (mine?.state === "failed" && !run.finished) return { text: `Failed · ${mine.error ?? "see the log"}`, cls: "fail" };
+  if (run.waiting_for?.kind === "review1" && run.mode === "shorts") return { text: "Your turn · the transcript", cls: "wait" };
   if (run.waiting_for) return { text: WAITS[run.waiting_for.kind] ?? "Your turn", cls: "wait" };
   if (run.finished) {
     const n = run.files.shorts.length;

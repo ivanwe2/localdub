@@ -32,7 +32,9 @@ pub struct RunSummary {
     pub done: Vec<String>,
     /// How long each finished stage took, in seconds (a review: how long it waited for you).
     pub timings: BTreeMap<String, f64>,
-    /// The dubbed video is ready: the mix stage is done.
+    /// "dub", or "shorts" for a Shorts-only run (no translation or dub; its stages end at review 1).
+    pub mode: String,
+    /// Done: the dubbed video is ready (the mix stage is done); for Shorts only, its Shorts are.
     pub finished: bool,
     /// The run's results so far.
     pub files: RunFiles,
@@ -63,10 +65,16 @@ pub struct RunFiles {
     pub subtitles: Vec<String>,
     /// The rendered Shorts, in both languages.
     pub shorts: Vec<String>,
+    /// The video the run was made from, for previews: inside the run's folder (an excerpt)...
+    pub original: Option<String>,
+    /// ...or a file in the home's videos folder, which the server serves at `/videos/<file>`.
+    pub source_video: Option<String>,
 }
 
 #[derive(serde::Deserialize)]
 struct StateFile {
+    /// "shorts" for a Shorts-only run; runs from before 0.12.0 have none and are dubs.
+    mode: Option<String>,
     source: String,
     channel: String,
     created: String,
@@ -76,6 +84,8 @@ struct StateFile {
     timings: BTreeMap<String, f64>,
     #[serde(default)]
     outputs: Outputs,
+    /// The video the run works from (the source, or its excerpt in the run's folder), once prepped.
+    video: Option<String>,
     /// Language ("dub" / "original") → the Shorts' paths.
     #[serde(default)]
     shorts: BTreeMap<String, Vec<String>>,
@@ -147,8 +157,18 @@ async fn read_summary(dir: &Path, name: String) -> std::io::Result<Option<RunSum
             return Ok(None);
         }
     };
-    let finished = state.done.iter().any(|s| s == "mix");
-    let waiting_for = waiting_for(dir, &state, finished).await;
+    let shorts_only = state.mode.as_deref() == Some("shorts");
+    // the part the Shorts are cut from is done: the dub, or for Shorts only the checked transcript
+    let cut_from = state
+        .done
+        .iter()
+        .any(|s| s == if shorts_only { "review1" } else { "mix" });
+    let finished = if shorts_only {
+        state.shorts.contains_key("original")
+    } else {
+        cut_from
+    };
+    let waiting_for = waiting_for(dir, &state, cut_from).await;
     let in_this_run = |path: &String| in_run(path, &name);
     let files = RunFiles {
         video: state.outputs.video.as_ref().and_then(in_this_run),
@@ -164,6 +184,11 @@ async fn read_summary(dir: &Path, name: String) -> std::io::Result<Option<RunSum
             .flatten()
             .filter_map(in_this_run)
             .collect(),
+        original: state.video.as_ref().and_then(in_this_run),
+        source_video: match &state.video {
+            Some(video) if in_this_run(video).is_none() => in_videos_folder(dir, video).await,
+            _ => None,
+        },
     };
     Ok(Some(RunSummary {
         name,
@@ -173,6 +198,7 @@ async fn read_summary(dir: &Path, name: String) -> std::io::Result<Option<RunSum
         seconds: state.seconds,
         done: state.done,
         timings: state.timings,
+        mode: if shorts_only { "shorts" } else { "dub" }.to_string(),
         finished,
         files,
         waiting_for,
@@ -181,7 +207,8 @@ async fn read_summary(dir: &Path, name: String) -> std::io::Result<Option<RunSum
 
 /// What the run waits for, worked out from its files, so it is known after a server restart too:
 /// - before the mix: a review whose stage isn't done yet and whose file the engine has written
-/// - once finished: Shorts candidates the engine proposed but hasn't rendered yet
+/// - once the dub (or a Shorts-only run's transcript) is done: Shorts candidates the engine proposed
+///   but hasn't rendered yet
 async fn waiting_for(dir: &Path, state: &StateFile, finished: bool) -> Option<Waiting> {
     let done = |stage: &str| state.done.iter().any(|s| s == stage);
     if !finished {
@@ -219,6 +246,18 @@ async fn waiting_for(dir: &Path, state: &StateFile, finished: bool) -> Option<Wa
         }
     }
     None
+}
+
+/// The file name of `video` if it is in the videos folder of the home that `run_dir` is in.
+async fn in_videos_folder(run_dir: &Path, video: &str) -> Option<String> {
+    let videos = tokio::fs::canonicalize(run_dir.parent()?.parent()?.join("videos"))
+        .await
+        .ok()?;
+    let video = tokio::fs::canonicalize(video).await.ok()?;
+    if video.parent()? != videos {
+        return None;
+    }
+    Some(video.file_name()?.to_string_lossy().into_owned())
 }
 
 async fn exists(path: &Path) -> bool {
@@ -272,6 +311,7 @@ mod tests {
                     seconds: Some(120.0),
                     done: strings(&["prep"]),
                     timings: BTreeMap::from([("prep".to_string(), 0.3)]),
+                    mode: "dub".into(),
                     finished: false,
                     files: RunFiles::default(),
                     waiting_for: None,
@@ -297,6 +337,7 @@ mod tests {
                         ("prep".to_string(), 0.4),
                         ("voice".to_string(), 105.2),
                     ]),
+                    mode: "dub".into(),
                     finished: true,
                     files: RunFiles {
                         video: Some("market.en.mp4".into()),
@@ -434,6 +475,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_shorts_only_run_waits_for_its_pick_after_the_transcript_and_is_done_with_its_shorts()
+    {
+        let home = tempfile::tempdir().unwrap();
+        let state = r#"{"source": "/videos/talk.mp4", "channel": "clips", "created": "2026-11-22T10:00:00",
+            "mode": "shorts", "done": ["prep", "separate", "transcribe", "spelling", "review1"], "timings": {}}"#;
+        write_run(home.path(), "picking", state);
+        write_file(
+            home.path(),
+            "picking",
+            "shorts/original/candidates.txt",
+            "status: pending
+",
+        );
+        let rendered = state.replace(
+            r#""timings": {}"#,
+            r#""timings": {}, "shorts": {"original": ["/root/dub/runs/done/shorts/original/short-1-x.mp4"]}"#,
+        );
+        write_run(home.path(), "done", &rendered);
+
+        let picking = read_run(home.path(), "picking").await.unwrap().unwrap();
+        let done = read_run(home.path(), "done").await.unwrap().unwrap();
+
+        assert_eq!((picking.mode.as_str(), picking.finished), ("shorts", false));
+        let waiting = picking.waiting_for.unwrap();
+        assert_eq!(
+            (waiting.kind.as_str(), waiting.lang.as_deref()),
+            ("shorts", Some("original"))
+        );
+        assert!(done.finished && done.waiting_for.is_none());
+        assert_eq!(done.files.shorts, ["shorts/original/short-1-x.mp4"]);
+    }
+
+    #[tokio::test]
+    async fn the_video_a_run_was_made_from_is_found_for_previews() {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir_all(home.path().join("videos")).unwrap();
+        let source = home.path().join("videos").join("talk.mp4");
+        fs::write(&source, "video").unwrap();
+        let elsewhere = tempfile::NamedTempFile::new().unwrap();
+        let state = |video: &str| {
+            format!(
+                r#"{{"source": "x", "channel": "c", "created": "2026-11-22T10:00:00", "done": ["prep"],
+                    "video": {video:?}}}"#
+            )
+        };
+        write_run(home.path(), "whole", &state(source.to_str().unwrap()));
+        let excerpt = home.path().join("runs").join("part").join("video.mp4");
+        write_run(home.path(), "part", &state(excerpt.to_str().unwrap()));
+        write_run(
+            home.path(),
+            "outside",
+            &state(elsewhere.path().to_str().unwrap()),
+        );
+
+        let files = |name: &'static str| {
+            let home = home.path().to_path_buf();
+            async move { read_run(&home, name).await.unwrap().unwrap().files }
+        };
+
+        let whole = files("whole").await;
+        assert_eq!(
+            (whole.original, whole.source_video.as_deref()),
+            (None, Some("talk.mp4"))
+        );
+        assert_eq!(files("part").await.original.as_deref(), Some("video.mp4"));
+        let outside = files("outside").await;
+        assert_eq!((outside.original, outside.source_video), (None, None));
+    }
+
+    #[tokio::test]
     async fn reading_a_run_that_does_not_exist_gives_none() {
         let home = tempfile::tempdir().unwrap();
 
@@ -463,6 +574,7 @@ mod tests {
                 video: Some("market.en.mp4".into()),
                 subtitles: strings(&["market.en.srt", "market.bg.srt"]),
                 shorts: strings(&["shorts/dub/short-2-b.mp4", "shorts/original/short-1-a.mp4"]),
+                ..RunFiles::default()
             },
             "a path outside the run's folder is left out"
         );

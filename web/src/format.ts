@@ -9,7 +9,8 @@ export function findChannel(name: string, channels: Channel[]): Channel | undefi
 
 /**
  * The start request's language fields: only a new channel sends them (an existing channel's
- * languages are fixed), and the speaker only when one is chosen.
+ * languages are fixed), and the speaker only when one is chosen. Shorts only needs just the video's
+ * language; a channel that made only Shorts gets its dub language (once) from its first dub.
  */
 export function languageFields(
   channel: string,
@@ -17,9 +18,17 @@ export function languageFields(
   source: string,
   target: string,
   speaker: string,
+  shortsOnly = false,
 ): Pick<StartRequest, "source" | "target" | "speaker"> {
-  if (findChannel(channel, channels)) return {};
-  return { source, target, ...(speaker === "man" || speaker === "woman" ? { speaker } : {}) };
+  const who: Pick<StartRequest, "speaker"> = speaker === "man" || speaker === "woman" ? { speaker } : {};
+  const known = findChannel(channel, channels);
+  if (known) return known.target || shortsOnly ? {} : { target, ...who };
+  return shortsOnly ? { source } : { source, target, ...who };
+}
+
+/** A channel's languages in short: "BG → EN", or "DE · Shorts only" before its first dub. */
+export function channelPair(channel: Channel): string {
+  return channel.target ? `${channel.source.toUpperCase()} → ${channel.target.toUpperCase()}` : `${channel.source.toUpperCase()} · Shorts only`;
 }
 
 /** The dub language a new channel starts with: English if it can be dubbed into, else the first. */

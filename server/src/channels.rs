@@ -11,11 +11,12 @@ use crate::start::is_safe_name;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Channel {
     pub name: String,
-    /// The video's language and the dub's: codes ("bg", "en") and names ("Bulgarian").
+    /// The video's language and the dub's: codes ("bg", "en") and names ("Bulgarian"). A channel
+    /// made by a Shorts-only run has no dub language until its first dub.
     pub source: String,
-    pub target: String,
+    pub target: Option<String>,
     pub source_name: String,
-    pub target_name: String,
+    pub target_name: Option<String>,
     /// "man" / "woman" when set; only the translation's grammar uses it.
     pub speaker: Option<String>,
     /// Has the channel a voice sample yet? (Its first run chooses one.)
@@ -67,18 +68,21 @@ async fn read_channel(dir: &Path, name: String) -> Option<Channel> {
         // what every profile meant before channels had languages (settings.LEGACY_LANGUAGES)
         None => (
             "bg".into(),
-            "en".into(),
+            Some("en".into()),
             "Bulgarian".into(),
-            "English".into(),
+            Some("English".into()),
         ),
         Some(source) => {
-            let target = profile.target_lang.unwrap_or_default();
+            let target = profile.target_lang.filter(|t| !t.is_empty());
             let source_name = profile
                 .source_language_name
                 .unwrap_or_else(|| source.clone());
-            let target_name = profile
-                .target_language_name
-                .unwrap_or_else(|| target.clone());
+            let target_name = target.as_ref().map(|t| {
+                profile
+                    .target_language_name
+                    .filter(|n| !n.is_empty())
+                    .unwrap_or_else(|| t.clone())
+            });
             (source, target, source_name, target_name)
         }
     };
@@ -133,7 +137,7 @@ mod tests {
             (
                 friend.name.as_str(),
                 friend.source.as_str(),
-                friend.target.as_str()
+                friend.target.as_deref().unwrap_or("")
             ),
             ("friend", "bg", "en"),
             "a profile from before languages is Bulgarian → English"
@@ -141,11 +145,31 @@ mod tests {
         assert!(!friend.has_voice, "its voice file is missing");
         assert_eq!(friend.speaker, None);
         assert_eq!(
-            (market.source_name.as_str(), market.target_name.as_str()),
-            ("German", "Spanish")
+            (market.source_name.as_str(), market.target_name.as_deref()),
+            ("German", Some("Spanish"))
         );
         assert_eq!(market.speaker.as_deref(), Some("woman"));
         assert!(market.has_voice);
+    }
+
+    #[tokio::test]
+    async fn a_channel_that_made_only_shorts_has_no_dub_language_yet() {
+        let home = tempfile::tempdir().unwrap();
+        write_profile(
+            home.path(),
+            "clips",
+            r#"{"source_lang": "de", "target_lang": "", "source_language_name": "German",
+                "target_language_name": "", "voice_ref": ""}"#,
+        );
+
+        let clips = &list_channels(home.path()).await.unwrap()[0];
+
+        assert_eq!(
+            (clips.target.as_deref(), clips.target_name.as_deref()),
+            (None, None)
+        );
+        assert_eq!(clips.source_name, "German");
+        assert!(!clips.has_voice);
     }
 
     #[tokio::test]

@@ -456,7 +456,8 @@ def stage_review1(run: Run, ctx: Ctx):
     segs = upgrade_all(read_json(run.p("spelled.json")))
     report = {int(k): v for k, v in read_json(run.p("spelling.json")).items()}
     profile = ctx.profile
-    has_voice = profile.voice_path is not None and profile.voice_path.exists()
+    shorts_only = run.state.get("mode") == "shorts"  # no dub: no voice sample to choose
+    has_voice = shorts_only or (profile.voice_path is not None and profile.voice_path.exists())
     if not path.exists():
         voice = None
         if not has_voice:
@@ -465,7 +466,7 @@ def stage_review1(run: Run, ctx: Ctx):
                 voice = {"candidates": [{**c, "path": str(run.p(c["path"]))} for c in data["candidates"]]}
             else:
                 voice = {"path": None}
-        count = review.write_transcript_review(path, segs, report, voice, profile["source_lang"])
+        count = review.write_transcript_review(path, segs, report, voice, profile["source_lang"], captions=shorts_only)
         if ctx.no_review:
             if not has_voice:
                 log(f"   voice sample: {set_voice(run, profile, 'auto')}")
@@ -476,17 +477,21 @@ def stage_review1(run: Run, ctx: Ctx):
             log("   nothing doubtful in the transcript: no review needed")
             return None
         what = f"{count} lines to check" + (", and the voice sample to listen to" if voice else "")
-        return waiting(ctx, "review1", "Review 1 of 2 is ready (the transcript)", path, what + ".")
+        title = "The transcript review is ready (it becomes the captions)" if shorts_only else \
+            "Review 1 of 2 is ready (the transcript)"
+        return waiting(ctx, "review1", title, path, what + ".")
     parsed = review.parse(path, profile["source_lang"], profile["target_lang"])
     if parsed["status"] != "approved":
-        return waiting(ctx, "review1", "Review 1 of 2 is still waiting for you", path)
+        return waiting(ctx, "review1", "The transcript review is still waiting for you" if shorts_only else
+                       "Review 1 of 2 is still waiting for you", path)
     n = learn_transcript(parsed, segs, report, profile)
-    data = load_candidates(run)
-    picked_meanwhile = data is not None and data.get("picked") is not None and has_voice  # localdub voice --pick
-    if picked_meanwhile and (parsed["voice"] or "auto").lower() == "auto":
-        log(f"   voice sample: {profile.data.get('voice_from') or 'as picked'} (picked with localdub voice)")
-    elif parsed["voice"] is not None or not has_voice:
-        log(f"   voice sample: {set_voice(run, profile, parsed['voice'] or 'auto')}")
+    if not shorts_only:
+        data = load_candidates(run)
+        picked_meanwhile = data is not None and data.get("picked") is not None and has_voice  # localdub voice --pick
+        if picked_meanwhile and (parsed["voice"] or "auto").lower() == "auto":
+            log(f"   voice sample: {profile.data.get('voice_from') or 'as picked'} (picked with localdub voice)")
+        elif parsed["voice"] is not None or not has_voice:
+            log(f"   voice sample: {set_voice(run, profile, parsed['voice'] or 'auto')}")
     profile.save()
     run.segs = segs
     log(f"   {n['edited']} lines edited; learned {n['corrections']} corrections, {n['names']} names, "
@@ -668,7 +673,13 @@ STAGES = [
     ("mix", "mix over the music, write the video and subtitles", stage_mix),
 ]
 NAMES = [s[0] for s in STAGES]
+SHORTS_ONLY = NAMES[:NAMES.index("review1") + 1]  # a Shorts-only run: the transcript, then its Shorts
 SHORTS_LANGS = ("original", "dub")  # run --shorts N makes both, in this order
+
+
+def run_stages(state: dict) -> list[str]:
+    """The stages of this run: all of them for a dub, up to review 1 for a Shorts-only run."""
+    return SHORTS_ONLY if state.get("mode") == "shorts" else NAMES
 STAGE_FILES = {  # removed when a stage is redone
     "review1": ["review-1-transcript.txt", "voice-sample.wav", "voice-candidates", "voice-candidates.json"],
     "translate": ["translate-partial.json"],
@@ -685,15 +696,17 @@ def default_name(src: Path, start, length) -> str:
     return name
 
 
-def channel_profile(name: str, args, settings: dict, need_dictionary: bool = False) -> Profile | str:
+def channel_profile(name: str, args, settings: dict, need_dictionary: bool = False,
+                    shorts_only: bool = False) -> Profile | str:
     """The channel's profile for this run, or why it can't be used. A new channel gets its languages
-    (and speaker) from --from/--to/--speaker; an existing one must not be given others. With
-    `need_dictionary`, a new channel whose spelling dictionary is missing isn't made at all."""
+    (and speaker) from --from/--to/--speaker; an existing one must not be given others. A Shorts-only
+    run needs only the video's language: such a channel gets its dub language on its first dub, once.
+    With `need_dictionary`, a new channel whose spelling dictionary is missing isn't made at all."""
     profile = Profile(name)
     if profile.is_new:
-        if not (args.source and args.target):
+        if not (args.source and (args.target or shorts_only)):
             return (f"channel '{name}' is new: give the video's language and the dub's with --from and --to, "
-                    f"e.g. --from bg --to en (localdub languages lists them)")
+                    f"e.g. --from bg --to en (localdub languages lists them; Shorts only: --from alone)")
         try:
             profile.set_languages(args.source, args.target, settings)
         except ValueError as e:
@@ -702,10 +715,24 @@ def channel_profile(name: str, args, settings: dict, need_dictionary: bool = Fal
             return missing  # before it's saved: a new try may choose other languages
         profile["speaker"] = args.speaker or ""
         profile.save()
-        log(f"localdub: new channel '{name}': {profile['source_language_name']} → {profile['target_language_name']}")
+        dub = f" → {profile['target_language_name']}" if profile.dubs else " (Shorts only so far)"
+        log(f"localdub: new channel '{name}': {profile['source_language_name']}{dub}")
         return profile
-    given = (args.source or profile["source_lang"], args.target or profile["target_lang"])
-    if given != (profile["source_lang"], profile["target_lang"]):
+    if args.source and args.source != profile["source_lang"]:
+        return (f"channel '{name}' is for {profile['source_language_name']} videos ({profile['source_lang']}); "
+                f"for {args.source} use another channel name")
+    if not profile.dubs and not shorts_only:
+        if not args.target:
+            return (f"channel '{name}' has made only Shorts so far: give its dub language once with --to, "
+                    f"e.g. --to en (localdub languages lists them)")
+        try:
+            profile.set_languages(profile["source_lang"], args.target, settings)
+        except ValueError as e:
+            return str(e)
+        profile.save()
+        log(f"localdub: channel '{name}' now dubs into {profile['target_language_name']}")
+    given = (profile["source_lang"], args.target or profile["target_lang"])
+    if profile.dubs and given != (profile["source_lang"], profile["target_lang"]):
         return (f"channel '{name}' dubs {profile['source_lang']} → {profile['target_lang']}; "
                 f"for {given[0]} → {given[1]} use another channel name")
     if args.speaker and args.speaker != profile["speaker"]:
@@ -728,25 +755,31 @@ def cmd_run(args) -> int:
         if not run.state:
             if not args.channel:
                 return fail("a new run needs --channel NAME (the channel whose profile it uses and teaches)")
-            checked = channel_profile(args.channel, args, settings, need_dictionary=True)  # before the run exists
+            checked = channel_profile(args.channel, args, settings, need_dictionary=True,  # before the run exists
+                                      shorts_only=args.shorts_only)
             if isinstance(checked, str):
                 return fail(checked)
             if missing := missing_dictionary(checked):
                 return fail(missing)
             run.state = {"source": str(target.resolve()), "channel": args.channel, "start": start, "length": length,
-                         "created": dt.datetime.now().isoformat(timespec="seconds"), "done": [], "timings": {}}
+                         "created": dt.datetime.now().isoformat(timespec="seconds"),
+                         "mode": "shorts" if args.shorts_only else "dub", "done": [], "timings": {}}
             run.save()
     st = run.state
     events.note(run=run.name, channel=st["channel"], dir=str(run.dir))
     if args.channel and args.channel != st["channel"]:
         return fail(f"run '{run.name}' belongs to channel '{st['channel']}'; use --name for a separate run")
-    checked = channel_profile(st["channel"], args, settings)
+    shorts_only = st.get("mode") == "shorts"
+    if args.shorts_only and not shorts_only:
+        return fail(f"run '{run.name}' is a dub; for Shorts only start a new run (--name)")
+    checked = channel_profile(st["channel"], args, settings, shorts_only=shorts_only)
     if isinstance(checked, str):
         return fail(checked)
+    names = run_stages(st)
     if args.redo:
-        if args.redo not in NAMES:
-            return fail(f"--redo takes one of: {', '.join(NAMES)}")
-        for name in NAMES[NAMES.index(args.redo):]:
+        if args.redo not in names:
+            return fail(f"--redo takes one of: {', '.join(names)}")
+        for name in names[names.index(args.redo):]:
             if name in st["done"]:
                 st["done"].remove(name)
             for f in STAGE_FILES.get(name, []):
@@ -758,11 +791,12 @@ def cmd_run(args) -> int:
         return fail(missing)  # the spelling stages need it: say so now, not after the GPU work
     ctx = Ctx(settings, profile, Server(settings), args.no_review, f"localdub run {run.name}")
     log(f"localdub: run '{run.name}' (channel '{st['channel']}') in {run.dir}")
+    shorts_after = ["original"] if shorts_only else list(SHORTS_LANGS) if args.shorts else []
     events.emit("start", command="run", run=run.name, channel=st["channel"], dir=str(run.dir),
-                stages=NAMES + ([f"shorts-{lang}" for lang in SHORTS_LANGS] if args.shorts else []),
+                mode=st.get("mode", "dub"), stages=names + [f"shorts-{lang}" for lang in shorts_after],
                 done=list(st["done"]))
     for name, what, fn in STAGES:
-        if name in st["done"]:
+        if name in st["done"] or name not in names:
             continue
         log(f"\n== {name}: {what}")
         events.emit("stage", stage=name, status="started")
@@ -783,20 +817,27 @@ def cmd_run(args) -> int:
         run.save()
         events.emit("stage", stage=name, status="done", seconds=took)
         log(f"   ({took:.0f}s)")
-    if args.shorts:
-        for lang in SHORTS_LANGS:
-            stage = f"shorts-{lang}"
-            events.emit("stage", stage=stage, status="started")
-            t0 = time.monotonic()
-            rc = make_shorts(run, settings, lang, auto=args.shorts)
-            if rc != 0:
-                return rc
-            st["timings"][stage] = round(time.monotonic() - t0, 1)
-            run.save()
-            events.emit("stage", stage=stage, status="done", seconds=st["timings"][stage])
+    for lang in shorts_after:
+        stage = f"shorts-{lang}"
+        events.emit("stage", stage=stage, status="started")
+        t0 = time.monotonic()
+        rc = make_shorts(run, settings, lang, auto=args.shorts)
+        if rc != 0:
+            return rc
+        st["timings"][stage] = round(time.monotonic() - t0, 1)
+        run.save()
+        events.emit("stage", stage=stage, status="done", seconds=st["timings"][stage])
+    machine = sum(v for k, v in st["timings"].items() if not k.startswith("review"))
+    if shorts_only:
+        events.note(shorts=st.get("shorts", {}), timings=st["timings"])
+        log("\n== done")
+        for f in st["shorts"]["original"]:
+            log(f"   {f}")
+        log("   time per stage: " + ", ".join(f"{k} {v:.0f}s" for k, v in st["timings"].items()))
+        log(f"   machine time in total: {machine / 60:.1f} min")
+        return 0
     out = st["outputs"]
     events.note(outputs=out, shorts=st.get("shorts", {}), timings=st["timings"])
-    machine = sum(v for k, v in st["timings"].items() if not k.startswith("review"))
     log("\n== done")
     log(f"   video:      {out['video']}")
     log(f"   subtitles:  {out['subtitles'][0]}  (and {Path(out['subtitles'][1]).name})")
@@ -954,15 +995,20 @@ def make_shorts(run: Run, settings: dict, lang: str, auto: int = 0, redo: str | 
 def cmd_shorts(args) -> int:
     run = Run(args.name)
     events.note(run=run.name, dir=str(run.dir))
-    if not run.state or "mix" not in run.state.get("done", []):
+    shorts_only = run.state.get("mode") == "shorts"
+    lang = args.lang or ("original" if shorts_only else "dub")
+    done = run.state.get("done", [])
+    if shorts_only and lang == "dub":
+        return fail(f"run '{args.name}' is Shorts only: it has no dub to cut from (--lang original)")
+    if not run.state or "review1" not in done or (not shorts_only and "mix" not in done):
         return fail(f"run '{args.name}' isn't finished yet (localdub run {args.name})")
     events.emit("start", command="shorts", run=run.name, channel=run.state["channel"], dir=str(run.dir),
-                lang=args.lang)
-    rc = make_shorts(run, load_settings(), args.lang, args.auto, args.redo)
+                lang=lang)
+    rc = make_shorts(run, load_settings(), lang, args.auto, args.redo)
     if rc == 0:
-        events.note(shorts={args.lang: run.state["shorts"][args.lang]})
+        events.note(shorts={lang: run.state["shorts"][lang]})
         log("\n== done")
-        for f in run.state["shorts"][args.lang]:
+        for f in run.state["shorts"][lang]:
             log(f"   {f}")
     return rc
 
@@ -980,6 +1026,9 @@ def cmd_voice(args) -> int:
         return fail(f"run '{run.name}' isn't transcribed yet: voice samples come from its separated speech "
                     f"(localdub run {run.name} gets it there)")
     profile = Profile(run.state["channel"])
+    if not profile.is_new and not profile.dubs:
+        return fail(f"channel '{profile.name}' has made only Shorts so far: a voice is picked for a dub language "
+                    f"(its first dub: localdub run VIDEO --channel {profile.name} --to LANG)")
     events.emit("start", command="voice", run=run.name, channel=profile.name, dir=str(run.dir))
     if args.pick is not None:
         if args.pick == "current":
@@ -1044,9 +1093,9 @@ def channel_info(profile: Profile) -> dict:
     return {
         "name": profile.name,
         "source": profile["source_lang"],
-        "target": profile["target_lang"],
+        "target": profile["target_lang"] or None,
         "source_name": profile["source_language_name"],
-        "target_name": profile["target_language_name"],
+        "target_name": profile["target_language_name"] or None,
         "speaker": profile["speaker"] or None,
         "voice": profile.voice_path is not None and profile.voice_path.exists(),
         "voice_from": profile.data.get("voice_from"),
@@ -1063,7 +1112,7 @@ def cmd_channel(args) -> int:
         profile.save()
     info = channel_info(profile)
     voice = (info["voice_from"] or "set") if info["voice"] else "none yet"
-    log(f"channel '{info['name']}': {info['source_name']} → {info['target_name']}, "
+    log(f"channel '{info['name']}': {info['source_name']} → {info['target_name'] or '(Shorts only so far)'}, "
         f"speaker: {info['speaker'] or 'not set'}, voice sample: {voice}")
     events.emit("channel", **info)
     return 0
@@ -1111,16 +1160,21 @@ def main(argv=None) -> int:
     r.add_argument("--no-review", action="store_true", help="skip both reviews (nothing is learned)")
     r.add_argument("--redo", metavar="STAGE", help=f"redo from this stage on: {', '.join(NAMES)}")
     r.add_argument("--shorts", type=int, default=0, metavar="N",
-                   help="when the video is done, also make the top N Shorts in both languages, without stopping")
+                   help="when the video is done, also make the top N Shorts in both languages, without stopping "
+                        "(with --shorts-only: render the top N; 0 = stop for your pick)")
+    r.add_argument("--shorts-only", action="store_true",
+                   help="no dub: transcribe, then Shorts in the video's language (a new channel needs only --from)")
     r.add_argument("--from", dest="source", metavar="LANG",
                    help="a new channel's video language, e.g. bg (see: localdub languages)")
-    r.add_argument("--to", dest="target", metavar="LANG", help="a new channel's dub language, e.g. en")
+    r.add_argument("--to", dest="target", metavar="LANG",
+                   help="a new channel's dub language, e.g. en (or, once, for a channel that made only Shorts)")
     r.add_argument("--speaker", choices=["man", "woman"],
                    help="who speaks, so gendered languages translate 'I was tired' right (optional)")
     s = sub.add_parser("shorts", parents=[common], help="propose Shorts from a finished run, then render the ones you pick")
     s.add_argument("name", help="the run's name")
-    s.add_argument("--lang", choices=["dub", "original"], default="dub",
-                   help="dub: the dubbed video (default); original: the creator's own audio and language")
+    s.add_argument("--lang", choices=["dub", "original"],
+                   help="dub: the dubbed video (the default for a dub); original: the creator's own audio and "
+                        "language (the only one for a Shorts-only run)")
     s.add_argument("--auto", type=int, default=0, metavar="N", help="render the top N candidates without stopping")
     s.add_argument("--redo", choices=["vision", "select"], help="look at the video again / propose new candidates")
     v = sub.add_parser("voice", parents=[common],

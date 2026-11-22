@@ -138,6 +138,7 @@ function ReviewEditor({ name, run, channels, busy, onChange }: EditorProps) {
   const parsed = useMemo(() => parseReview(text), [text]);
   const first = useMemo(() => parseReview(original), [original]);
   const channel = channels.find((c) => c.name === run?.channel);
+  const shortsOnly = run?.mode === "shorts";
 
   function edit(next: string, block?: number) {
     setText(next);
@@ -176,11 +177,11 @@ function ReviewEditor({ name, run, channels, busy, onChange }: EditorProps) {
     <>
       <div className="page-title">
         <div>
-          <div className="kicker amber">{transcript ? "Review 1 of 2 · the transcript" : "Review 2 of 2 · the translation"}</div>
+          <div className="kicker amber">{transcript ? (shortsOnly ? "Review · the transcript" : "Review 1 of 2 · the transcript") : "Review 2 of 2 · the translation"}</div>
           <h1>{name}</h1>
           <p>
             {transcript
-              ? `What the speaker said${channel ? `, in ${channel.source_name}` : ""}. Fix names and words the model heard wrong; the dub is made from this. Only doubtful lines are listed.`
+              ? `What the speaker said${channel ? `, in ${channel.source_name}` : ""}. Fix names and words the model heard wrong; ${shortsOnly ? "the Shorts’ captions are" : "the dub is"} made from this. Only doubtful lines are listed.`
               : `Every line and its ${channel?.target_name ?? "dub"} translation. Fix what sounds wrong; a line over its budget gets sped up a little, so shorter is better.`}
           </p>
         </div>
@@ -296,12 +297,12 @@ function ReviewEditor({ name, run, channels, busy, onChange }: EditorProps) {
             </section>
           )}
           {!transcript && parsed.glossary && (
-            <Glossary terms={parsed.glossary} labels={[channel?.source.toUpperCase() ?? "SRC", channel?.target.toUpperCase() ?? "DUB"]} change={(terms) => edit(setGlossary(text, terms))} />
+            <Glossary terms={parsed.glossary} labels={[channel?.source.toUpperCase() ?? "SRC", channel?.target?.toUpperCase() ?? "DUB"]} change={(terms) => edit(setGlossary(text, terms))} />
           )}
           <ErrorText error={error} />
           <div className="stack" style={{ gap: 10 }}>
             <button type="button" className="btn go wide" style={{ minHeight: 44 }} disabled={working || busy} onClick={() => save(true)}>
-              {transcript ? "Approve and translate" : "Approve and voice it"}
+              {transcript ? (shortsOnly ? "Approve and find the Shorts" : "Approve and translate") : "Approve and voice it"}
             </button>
             <button type="button" className="btn wide" disabled={working || saved} onClick={() => save(false)}>
               {saved ? "Saved" : "Save, approve later"}

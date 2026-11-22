@@ -38,7 +38,7 @@ use crate::download::{Download, DownloadRequest, DownloadState};
 use crate::events::{Event, Language};
 use crate::job::{Job, JobState};
 use crate::runs::{RunSummary, Waiting};
-use crate::start::{ShortsRequest, StartRequest};
+use crate::start::{ShortsLang, ShortsRequest, StartRequest};
 use crate::status::{ModelServer, Status};
 use crate::videos::Video;
 use crate::voice::{PickRequest, VoiceSamples};
@@ -248,15 +248,25 @@ async fn continue_run(
     Ok((StatusCode::ACCEPTED, Json(launch(&state, &name, args)?)))
 }
 
-/// POST /api/runs/{name}/shorts `{"lang": "dub"}`: proposes Shorts for a finished run; the run then
-/// waits for you to pick them (its review is the candidates list), and continuing renders them.
+/// POST /api/runs/{name}/shorts `{"lang": "dub"}`: proposes Shorts for a finished run (a Shorts-only
+/// run: once its transcript is checked, original only); the run then waits for you to pick them (its
+/// review is the candidates list), and continuing renders them.
 async fn make_shorts(
     State(state): State<AppState>,
     UrlPath(name): UrlPath<String>,
     Json(req): Json<ShortsRequest>,
 ) -> Result<(StatusCode, Json<Job>), Failure> {
     let run = find_run(&state, &name).await?;
-    if !run.finished {
+    if run.mode == "shorts" {
+        if req.lang == ShortsLang::Dub {
+            let msg = format!("'{name}' is Shorts only: it has no dub to cut from");
+            return Err((StatusCode::CONFLICT, msg));
+        }
+        if !run.done.iter().any(|stage| stage == "review1") {
+            let msg = format!("'{name}' isn't transcribed yet; its Shorts come after that");
+            return Err((StatusCode::CONFLICT, msg));
+        }
+    } else if !run.finished {
         let msg = format!("'{name}' isn't dubbed yet; Shorts come after the dub");
         return Err((StatusCode::CONFLICT, msg));
     }
@@ -321,6 +331,10 @@ async fn revoice(
     UrlPath(name): UrlPath<String>,
 ) -> Result<(StatusCode, Json<Job>), Failure> {
     let run = find_run(&state, &name).await?;
+    if run.mode == "shorts" {
+        let msg = format!("'{name}' is Shorts only: there is no dub to voice again");
+        return Err((StatusCode::CONFLICT, msg));
+    }
     if !run.finished {
         let msg =
             format!("'{name}' isn't dubbed yet; it uses the channel's voice when it gets there");
@@ -640,6 +654,7 @@ async fn job_events(
 ///   uploads, downloads, the job, the models' and GPUs' status
 /// - `/files/<run>/<path>` a run's files, e.g. the dubbed video (ServeDir also answers range
 ///   requests, so the browser can seek in a video, and never serves anything outside runs/)
+/// - `/videos/<file>` the uploaded and downloaded videos, for previews of the original
 /// - everything else: the web UI, with index.html for any path it doesn't have
 pub fn app(state: AppState) -> Router {
     let api = Router::new()
@@ -671,7 +686,8 @@ pub fn app(state: AppState) -> Router {
         .route("/status/events", get(status_events));
     let mut router = Router::new()
         .nest("/api", api)
-        .nest_service("/files", ServeDir::new(state.home.join("runs")));
+        .nest_service("/files", ServeDir::new(state.home.join("runs")))
+        .nest_service("/videos", ServeDir::new(state.home.join("videos")));
     if let Some(web) = &state.web {
         let index = ServeFile::new(web.join("index.html"));
         router = router.fallback_service(ServeDir::new(web).fallback(index));

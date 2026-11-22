@@ -130,9 +130,20 @@ class Profile:
         """No profile saved yet: the channel's first run, which must give its languages."""
         return not self.path.exists()
 
-    def set_languages(self, source: str, target: str, settings: dict) -> None:
-        """A new channel's languages, checked against the language table and the voice model."""
-        src, tgt = languages.get(source), languages.get(target)
+    @property
+    def dubs(self) -> bool:
+        """Has the channel a dub language? A channel made by a Shorts-only run has only its video's."""
+        return bool(self.data.get("target_lang"))
+
+    def set_languages(self, source: str, target: str | None, settings: dict) -> None:
+        """A new channel's languages, checked against the language table and the voice model. Without
+        a target (a Shorts-only channel) the dub language is set later, on its first dub."""
+        src = languages.get(source)
+        if target is None:
+            self.data.update({"source_lang": src.code, "target_lang": "", "source_language_name": src.name,
+                              "target_language_name": "", "hunspell_dict": src.hunspell})
+            return
+        tgt = languages.get(target)
         if src.code == tgt.code:
             raise ValueError(f"a channel dubs from one language into another, not {src.name} into {tgt.name}")
         dubbable = languages.dub_languages(settings)

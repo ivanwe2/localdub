@@ -11,6 +11,7 @@ import {
   getSegments,
   getWaveform,
   makeShorts,
+  originalUrl,
   type RunSummary,
   saveReview,
   type Segment,
@@ -28,26 +29,28 @@ type ShortsScreenProps = { name: string | null; runs: RunSummary[]; channels: Ch
 export default function ShortsScreen({ name, runs, channels, busy, onChange }: ShortsScreenProps) {
   const run = runs.find((r) => r.name === name) ?? null;
   const waitingLang = run?.waiting_for?.kind === "shorts" ? ((run.waiting_for.lang as Lang | null) ?? null) : null;
-  const [lang, setLang] = useState<Lang>(waitingLang ?? "dub");
+  const shortsOnly = run?.mode === "shorts"; // no dub: Shorts in the original only
+  const [lang, setLang] = useState<Lang>(waitingLang ?? (shortsOnly ? "original" : "dub"));
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     if (waitingLang) setLang(waitingLang);
-  }, [waitingLang, name]);
+    else if (shortsOnly) setLang("original");
+  }, [waitingLang, shortsOnly, name]);
 
   if (!name || !run) {
-    const finished = runs.filter((r) => r.finished);
+    const finished = runs.filter(canCut);
     return (
       <>
         <div className="page-title">
           <div>
             <div className="kicker">Shorts</div>
-            <h1>{name ? `No run called ${name}` : "Shorts come after the dub"}</h1>
-            <p>Pick a dubbed run: localdub proposes the strongest moments, you tick the ones to render.</p>
+            <h1>{name ? `No run called ${name}` : "Shorts come after the dub or the transcript"}</h1>
+            <p>Pick a run: localdub proposes the strongest moments, you tick the ones to render.</p>
           </div>
         </div>
         {finished.length > 0 && (
           <section className="panel" style={{ marginTop: 24 }}>
-            <h2>Dubbed runs</h2>
+            <h2>Runs to cut Shorts from</h2>
             {finished.map((r) => (
               <div key={r.name} className="run-row">
                 <strong style={{ flex: "1 1 auto" }}>{r.name}</strong>
@@ -86,7 +89,7 @@ export default function ShortsScreen({ name, runs, channels, busy, onChange }: S
           <p>Ranked by the vision model from the picture, the motion and what is said. Tick the ones to render.</p>
         </div>
         <div className="tabs" role="group" aria-label="Which Shorts">
-          {(["dub", "original"] as Lang[]).map((l) => (
+          {((shortsOnly ? ["original"] : ["dub", "original"]) as Lang[]).map((l) => (
             <button key={l} type="button" aria-pressed={lang === l} onClick={() => setLang(l)}>
               {l === "dub" ? "Dub" : "Original"} · {names[l]}
             </button>
@@ -94,18 +97,20 @@ export default function ShortsScreen({ name, runs, channels, busy, onChange }: S
         </div>
       </div>
       {lang === waitingLang ? (
-        <Picker key={`${run.name}-${lang}`} run={run} busy={busy} onChange={onChange} />
+        <Picker key={`${run.name}-${lang}`} run={run} preview={lang === "original" ? (originalUrl(run) ?? dubUrl(run)) : dubUrl(run)} busy={busy} onChange={onChange} />
       ) : (
         <section className="panel" style={{ marginTop: 24 }}>
           <div className="panel-head">
             <h2>{rendered.length ? `${rendered.length} rendered` : "None yet"}</h2>
-            {run.finished && !run.waiting_for && (
+            {canCut(run) && !run.waiting_for && (
               <button type="button" className="btn primary" disabled={busy} onClick={make}>
                 Propose Shorts in {names[lang]}
               </button>
             )}
           </div>
-          {!run.finished && <p className="empty">Shorts come after the dub: this run isn’t dubbed yet.</p>}
+          {!canCut(run) && (
+            <p className="empty">{shortsOnly ? "Shorts come after the transcript: this run isn’t there yet." : "Shorts come after the dub: this run isn’t dubbed yet."}</p>
+          )}
           {run.waiting_for && run.waiting_for.kind !== "shorts" && <p className="empty">The run waits for something else first.</p>}
           {waitingLang && waitingLang !== lang && <p className="empty">Pick the {names[waitingLang]} Shorts first.</p>}
           {busy && <p className="small muted">A run is on air; proposing Shorts needs the GPUs, so it waits until it’s done.</p>}
@@ -135,7 +140,16 @@ function detail(details: string[], key: string): string {
   return line ? line.slice(key.length + 1).trim() : "";
 }
 
-function Picker({ run, busy, onChange }: { run: RunSummary; busy: boolean; onChange: () => void }) {
+/** Shorts can be cut from it: its dub is done (a Shorts-only run: its transcript is checked). */
+function canCut(run: RunSummary): boolean {
+  return run.mode === "shorts" ? run.done.includes("review1") : run.finished;
+}
+
+function dubUrl(run: RunSummary): string | null {
+  return run.files.video ? fileUrl(run.name, run.files.video) : null;
+}
+
+function Picker({ run, preview, busy, onChange }: { run: RunSummary; preview: string | null; busy: boolean; onChange: () => void }) {
   const [text, setText] = useState<string | null>(null);
   const [asText, setAsText] = useState(false);
   const [selected, setSelected] = useState(0);
@@ -280,13 +294,13 @@ function Picker({ run, busy, onChange }: { run: RunSummary; busy: boolean; onCha
           ) : c ? (
             <div className="row" style={{ alignItems: "flex-start", gap: 28 }}>
               <div className="preview" aria-label="Preview, 9 by 16">
-                {run.files.video && (
+                {preview && (
                   <video
                     ref={video}
                     muted
                     playsInline
                     preload="metadata"
-                    src={fileUrl(run.name, run.files.video)}
+                    src={preview}
                     onTimeUpdate={(e) => {
                       if (when && e.currentTarget.currentTime >= when[1]) {
                         e.currentTarget.pause();

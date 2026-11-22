@@ -56,7 +56,8 @@ const run = (over: Partial<RunSummary>): RunSummary => ({
   done: [],
   timings: {},
   finished: false,
-  files: { video: null, subtitles: [], shorts: [] },
+  mode: "dub",
+  files: { video: null, subtitles: [], shorts: [], original: null, source_video: null },
   waiting_for: null,
   ...over,
 });
@@ -94,7 +95,39 @@ describe("New run", () => {
 
     await waitFor(() => expect(sent.some((s) => s.method === "POST")).toBe(true));
     const body = JSON.parse(sent.find((s) => s.method === "POST")!.body!);
-    expect(body).toMatchObject({ channel: "brand-new", name: "market", source: "bg", target: "de", speaker: "woman", no_review: true });
+    // a channel's first video is reviewed unless switched off
+    expect(body).toMatchObject({ channel: "brand-new", name: "market", source: "bg", target: "de", speaker: "woman", no_review: false });
+  });
+
+  it("Shorts only asks a new channel for its video language alone; a known channel isn't reviewed by default", async () => {
+    const sent = serve({
+      "GET /api/videos": [],
+      "GET /api/languages": [
+        { code: "bg", name: "Bulgarian", dub: false, dictionary: "bg_BG", dictionary_installed: true, apt: "hunspell-bg" },
+        { code: "en", name: "English", dub: true, dictionary: "en_US", dictionary_installed: true, apt: "hunspell-en-us" },
+      ],
+      "POST /api/runs": { run: "x" },
+    });
+    render(<NewRun busy={false} channels={channels} onStarted={() => {}} />);
+
+    fireEvent.change(screen.getByLabelText(/^Channel/), { target: { value: "studio" } });
+    expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(false);
+    fireEvent.change(screen.getByLabelText(/^Channel/), { target: { value: "clips" } });
+    expect((screen.getByRole("checkbox") as HTMLInputElement).checked).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Shorts only" }));
+    fireEvent.change(await screen.findByLabelText("Video language"), { target: { value: "bg" } });
+    expect(screen.queryByLabelText("Dub language")).toBeNull();
+    expect(screen.queryByLabelText(/^Speaker/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "More Shorts" }));
+    fireEvent.click(screen.getByRole("checkbox")); // straight through
+    fireEvent.click(screen.getByRole("button", { name: "On the box" }));
+    fireEvent.change(screen.getByLabelText(/A video already on the box/), { target: { value: "/root/dub/videos/talk.mp4" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start the run" }));
+
+    await waitFor(() => expect(sent.some((s) => s.method === "POST")).toBe(true));
+    const body = JSON.parse(sent.find((s) => s.method === "POST")!.body!);
+    expect(body).toMatchObject({ channel: "clips", shorts_only: true, shorts: 1, source: "bg", no_review: true });
+    expect(body.target).toBeUndefined();
   });
 });
 
@@ -151,7 +184,7 @@ const SEGMENTS = [
 
 describe("Shorts", () => {
   it("ticks Shorts, moves a cut by a sentence and renders them", async () => {
-    const waiting = run({ finished: true, waiting_for: { kind: "shorts", lang: "dub", file: "shorts/dub/candidates.txt" }, files: { video: "market.en.mp4", subtitles: [], shorts: [] } });
+    const waiting = run({ finished: true, waiting_for: { kind: "shorts", lang: "dub", file: "shorts/dub/candidates.txt" }, files: { video: "market.en.mp4", subtitles: [], shorts: [], original: null, source_video: null } });
     const sent = serve({
       "GET /api/runs/market/review": { kind: "shorts", lang: "dub", file: "shorts/dub/candidates.txt", text: CANDIDATES },
       "GET /files/market/segments.json": SEGMENTS,

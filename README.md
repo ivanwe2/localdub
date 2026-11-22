@@ -53,7 +53,7 @@ takes about 30 minutes.
   video, so the second video needs fewer fixes than the first.
 - **Shorts on the side.** A vision model watches the video, then the strongest 25-60 s stretches are
   proposed: they stand alone, hook early and end on a payoff. Rendered 9:16 with big captions, in the
-  dub or the original language.
+  dub or the original language. Or skip the dub: *Shorts only* turns a video straight into Shorts.
 - **Yours to automate.** One command-line tool with JSON events and plain exit codes, so a person, a
   script or an AI agent can drive it. The web app is built on the same commands.
 
@@ -173,6 +173,8 @@ localdub run VIDEO --channel NAME                dub a whole video
           [--speaker man|woman]                  optional, for gendered languages (see below)
           [--start 1:00 --duration 2:30]         only an excerpt
           [--name NAME] [--no-review] [--shorts N]
+localdub run VIDEO --channel NAME --shorts-only  no dub: the transcript, then Shorts in the video's language
+          [--from LANG] [--shorts N]             (a new channel needs only --from; N: render the top N)
 localdub run NAME                                continue a run (after a review or an error)
 localdub run NAME --redo STAGE                   redo from a stage on
 localdub shorts NAME [--lang dub|original] [--auto N] [--redo select|vision]
@@ -219,6 +221,11 @@ payoff, strongest first. Mark the ones you want in `shorts/<lang>/candidates.txt
 tick them in the page). Each Short is 1080x1920: the full frame over a blurred copy of itself, the
 title on top and big burned-in captions. `--lang original` cuts from the original audio with captions
 timed by the real word timestamps, in whatever language the channel speaks.
+
+**Shorts only** (`--shorts-only`, or *Shorts only* in the page): no translation, no voice. The run
+separates, transcribes and spell-checks (one review, the transcript, which becomes the captions; or
+none with `--no-review`), then proposes Shorts in the video's language. A new channel then needs only
+its video language (`--from`); it gets its dub language on its first dub (`--to`, once).
 
 ### For scripts, servers and agents: `--json`
 
@@ -311,7 +318,7 @@ The API:
 | | |
 |---|---|
 | `GET /api/runs` | every run: its stages, files, and what it waits for (a review, picking Shorts) |
-| `POST /api/runs` | start one: `video`, `channel`, `name`, optional `no_review`, `shorts`; for a new channel also `source` and `target` (language codes) and optionally `speaker` (`man`/`woman`) |
+| `POST /api/runs` | start one: `video`, `channel`, `name`, optional `no_review`, `shorts`, `shorts_only`; for a new channel also `source` and `target` (language codes; Shorts only: `source` alone) and optionally `speaker` (`man`/`woman`) |
 | `GET /api/channels` | every channel: the languages it dubs from and into, its speaker, whether it has a voice |
 | `GET /api/languages` | the languages localdub knows (`localdub languages`): which can be dubbed into, which dictionaries are installed |
 | `GET` / `PUT /api/runs/<run>/review` | the file the run waits for: read it, save it (plain text) |
@@ -327,6 +334,7 @@ The API:
 | `GET /api/job`, `GET /api/job/events` | the current run (with its latest model requests and log, start and stage times, stage timings, line-by-line progress), and live as Server-Sent Events |
 | `GET /api/status`, `GET /api/status/events` | the models llama-swap has running and each GPU's load, memory, temperature and power, live every 2 s |
 | `GET /files/<run>/<path>` | a run's files |
+| `GET /videos/<file>` | an uploaded or downloaded video (the page previews a Shorts-only run's original with it) |
 
 One run at a time (409 while one is going). The server only answers to its own host names and
 takes changes only from its own page (not from other sites open in the same browser).

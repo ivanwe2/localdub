@@ -1,5 +1,5 @@
 // A new run: the video (uploaded, downloaded from a link, or already on the box), the channel (a
-// new one chooses its languages), the run's name and options.
+// new one chooses its languages), what to make (a dub, or Shorts only), the run's name and options.
 
 import { type DragEvent, type FormEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
 
@@ -15,6 +15,7 @@ import {
   type Video,
 } from "../api";
 import {
+  channelPair,
   defaultTarget,
   dictionaryNote,
   downloadText,
@@ -46,6 +47,7 @@ function remember(key: string, value: string) {
 }
 
 type Source = "upload" | "link" | "path";
+type Make = "dub" | "shorts";
 
 type NewRunProps = { busy: boolean; channels: Channel[]; onStarted: () => void };
 
@@ -58,7 +60,9 @@ export default function NewRun({ busy, channels, onStarted }: NewRunProps) {
   const [channel, setChannel] = useState(() => remembered("localdub.channel"));
   const [name, setName] = useState("");
   const [nameEdited, setNameEdited] = useState(false);
+  const [make, setMake] = useState<Make>("dub");
   const [reviews, setReviews] = useState(false);
+  const [reviewsTouched, setReviewsTouched] = useState(false);
   const [shorts, setShorts] = useState(0);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -78,8 +82,14 @@ export default function NewRun({ busy, channels, onStarted }: NewRunProps) {
 
   const known = findChannel(channel, channels);
   const isNew = channel.trim() !== "" && !known;
+  const shortsOnly = make === "shorts";
+  const needsDub = !shortsOnly && known != null && !known.target; // made only Shorts so far: its first dub
   useEffect(() => {
-    if (!isNew || languages !== null) return; // asked once, when a new channel's name is typed
+    // a channel's first video is where its voice is picked and the learning starts: review it
+    if (!reviewsTouched) setReviews(isNew);
+  }, [isNew, reviewsTouched]);
+  useEffect(() => {
+    if (!(isNew || needsDub) || languages !== null) return; // asked once, when the languages are needed
     listLanguages()
       .then((list) => {
         setLanguages(list);
@@ -89,7 +99,7 @@ export default function NewRun({ busy, channels, onStarted }: NewRunProps) {
         setLanguages([]);
         setLanguagesError(message(e));
       });
-  }, [isNew, languages]);
+  }, [isNew, needsDub, languages]);
 
   function chooseVideo(path: string, title?: string) {
     setVideo(path);
@@ -139,7 +149,8 @@ export default function NewRun({ busy, channels, onStarted }: NewRunProps) {
         name: name.trim(),
         no_review: !reviews,
         shorts,
-        ...languageFields(channel, channels, from, to, speaker),
+        shorts_only: shortsOnly,
+        ...languageFields(channel, channels, from, to, speaker, shortsOnly),
       });
       remember("localdub.channel", channel.trim());
       onStarted();
@@ -163,7 +174,11 @@ export default function NewRun({ busy, channels, onStarted }: NewRunProps) {
       <div className="page-title">
         <div>
           <h1>New run</h1>
-          <p>A video in, a dubbed video out, in the speaker’s own voice. Music and effects stay as they are.</p>
+          <p>
+            {shortsOnly
+              ? "A video in, vertical Shorts out: the strongest moments, captioned in the video’s own language."
+              : "A video in, a dubbed video out, in the speaker’s own voice. Music and effects stay as they are."}
+          </p>
         </div>
       </div>
       <div className="columns">
@@ -261,7 +276,9 @@ export default function NewRun({ busy, channels, onStarted }: NewRunProps) {
                 />
                 <small>
                   {known
-                    ? `dubs ${known.source_name} into ${known.target_name}${known.speaker ? ` · speaker: a ${known.speaker}` : ""}${known.has_voice ? " · has its voice" : " · its voice is picked in the first review"}`
+                    ? known.target_name
+                      ? `dubs ${known.source_name} into ${known.target_name}${known.speaker ? ` · speaker: a ${known.speaker}` : ""}${known.has_voice ? " · has its voice" : " · its voice is picked in the first review"}`
+                      : `${known.source_name} videos · Shorts only so far: a dub gives it its dub language`
                     : isNew
                       ? "a new channel: choose its languages below"
                       : "an existing channel, or a new name"}
@@ -276,7 +293,7 @@ export default function NewRun({ busy, channels, onStarted }: NewRunProps) {
             <div className="row" style={{ gap: 8, marginTop: 12 }}>
               {channels.slice(0, 4).map((c) => (
                 <button key={c.name} type="button" className="chip" aria-pressed={channel === c.name} onClick={() => setChannel(c.name)}>
-                  {c.name} · {c.source.toUpperCase()} → {c.target.toUpperCase()}
+                  {c.name} · {channelPair(c)}
                 </button>
               ))}
               <button
@@ -292,7 +309,7 @@ export default function NewRun({ busy, channels, onStarted }: NewRunProps) {
             </div>
             {isNew && (
               <fieldset className="new-channel">
-                <legend className="kicker amber">A new channel · its languages stay with it</legend>
+                <legend className="kicker amber">A new channel · {shortsOnly ? "its video language stays with it" : "its languages stay with it"}</legend>
                 <ErrorText error={languagesError && `Couldn't load the languages: ${languagesError}`} />
                 <div className="row">
                   <label className="field">
@@ -307,32 +324,24 @@ export default function NewRun({ busy, channels, onStarted }: NewRunProps) {
                       ))}
                     </select>
                   </label>
-                  <label className="field">
-                    Dub language
-                    <select value={to} onChange={(e) => setTo(e.target.value)} required>
-                      <option value="">Choose…</option>
-                      {(languages ?? [])
-                        .filter((l) => l.dub && l.code !== from)
-                        .map((l) => (
-                          <option key={l.code} value={l.code}>
-                            {l.name}
-                          </option>
-                        ))}
-                    </select>
-                  </label>
-                  <label className="field">
-                    Speaker
-                    <select value={speaker} onChange={(e) => setSpeaker(e.target.value)}>
-                      <option value="">Not set</option>
-                      <option value="man">A man</option>
-                      <option value="woman">A woman</option>
-                    </select>
-                    <small>only for the grammar of “I” in gendered languages</small>
-                  </label>
+                  {!shortsOnly && <DubField languages={languages} source={from} to={to} setTo={setTo} />}
+                  {!shortsOnly && <SpeakerField speaker={speaker} setSpeaker={setSpeaker} />}
                 </div>
                 <p className="small faint" style={{ margin: "12px 0 0" }}>
-                  The channel’s voice is picked in its first review, from samples of this video.
+                  {shortsOnly
+                    ? "Its dub language is chosen on its first dub; until then it makes Shorts."
+                    : "The channel’s voice is picked in its first review, from samples of this video."}
                 </p>
+              </fieldset>
+            )}
+            {needsDub && known && (
+              <fieldset className="new-channel">
+                <legend className="kicker amber">Its first dub · the dub language stays with it</legend>
+                <ErrorText error={languagesError && `Couldn't load the languages: ${languagesError}`} />
+                <div className="row">
+                  <DubField languages={languages} source={known.source} to={to} setTo={setTo} />
+                  <SpeakerField speaker={speaker} setSpeaker={setSpeaker} />
+                </div>
               </fieldset>
             )}
           </section>
@@ -341,6 +350,14 @@ export default function NewRun({ busy, channels, onStarted }: NewRunProps) {
             <div className="step">
               <span className="n">03</span>
               <h2>The run</h2>
+            </div>
+            <div className="tabs" role="group" aria-label="What to make" style={{ marginBottom: 18 }}>
+              <button type="button" aria-pressed={!shortsOnly} onClick={() => setMake("dub")}>
+                Dub + Shorts
+              </button>
+              <button type="button" aria-pressed={shortsOnly} onClick={() => setMake("shorts")}>
+                Shorts only
+              </button>
             </div>
             <div className="row bottom" style={{ gap: 20 }}>
               <label className="field">
@@ -358,7 +375,7 @@ export default function NewRun({ busy, channels, onStarted }: NewRunProps) {
               </label>
               <div className="stack" style={{ gap: 6 }}>
                 <span style={{ fontSize: 14, fontWeight: 500 }} id="shorts-label">
-                  Shorts in each language
+                  {shortsOnly ? "Shorts to render" : "Shorts in each language"}
                 </span>
                 <div className="stepper" role="group" aria-labelledby="shorts-label">
                   <button type="button" aria-label="Fewer Shorts" disabled={shorts === 0} onClick={() => setShorts(Math.max(0, shorts - 1))}>
@@ -369,16 +386,26 @@ export default function NewRun({ busy, channels, onStarted }: NewRunProps) {
                     +
                   </button>
                 </div>
+                {shortsOnly && <small className="faint">{shorts ? `the top ${shorts}, without stopping` : "0: you pick them from the proposals"}</small>}
               </div>
             </div>
             <label className="switch" style={{ marginTop: 18 }}>
-              <input type="checkbox" checked={reviews} onChange={(e) => setReviews(e.target.checked)} />
-              Review the transcript and the translation before the voice
+              <input
+                type="checkbox"
+                checked={reviews}
+                onChange={(e) => {
+                  setReviews(e.target.checked);
+                  setReviewsTouched(true);
+                }}
+              />
+              {shortsOnly ? "Review the transcript first (it becomes the captions)" : "Review the transcript and the translation before the voice"}
             </label>
             <p className="small faint" style={{ margin: "6px 0 0 30px" }}>
-              {reviews
-                ? "Two stops: the transcript (names, spelling, the voice) and the translation. What you fix there, the channel learns."
-                : "Straight through; nothing is learned for the channel."}
+              {!reviews
+                ? "Straight through; nothing is learned for the channel."
+                : shortsOnly
+                  ? "One stop: names and spelling in the transcript. What you fix there, the channel learns."
+                  : "Two stops: the transcript (names, spelling, the voice) and the translation. What you fix there, the channel learns."}
             </p>
           </section>
 
@@ -418,6 +445,39 @@ export default function NewRun({ busy, channels, onStarted }: NewRunProps) {
  * Downloading a video from a link with yt-dlp on the server, live. When a download this page saw
  * going is done, `onDone` gets it.
  */
+/** The dub language: the ones the voice model speaks, except the video's own. */
+function DubField({ languages, source, to, setTo }: { languages: Language[] | null; source: string; to: string; setTo: (code: string) => void }) {
+  return (
+    <label className="field">
+      Dub language
+      <select value={to} onChange={(e) => setTo(e.target.value)} required>
+        <option value="">Choose…</option>
+        {(languages ?? [])
+          .filter((l) => l.dub && l.code !== source)
+          .map((l) => (
+            <option key={l.code} value={l.code}>
+              {l.name}
+            </option>
+          ))}
+      </select>
+    </label>
+  );
+}
+
+function SpeakerField({ speaker, setSpeaker }: { speaker: string; setSpeaker: (speaker: string) => void }) {
+  return (
+    <label className="field">
+      Speaker
+      <select value={speaker} onChange={(e) => setSpeaker(e.target.value)}>
+        <option value="">Not set</option>
+        <option value="man">A man</option>
+        <option value="woman">A woman</option>
+      </select>
+      <small>only for the grammar of “I” in gendered languages</small>
+    </label>
+  );
+}
+
 function DownloadBox({ onDone }: { onDone: (download: Download) => void }) {
   const download = useDownload();
   const [url, setUrl] = useState("");

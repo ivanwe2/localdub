@@ -93,11 +93,12 @@ def video(path: Path):
                     "-c:v", "libx264", "-crf", "34", "-pix_fmt", "yuv420p", str(path)], check=True)
 
 
-def run(name, done, timings, files=None, seconds=float(LENGTH), outputs=None, created="2026-11-20T10:00:00"):
+def run(name, done, timings, files=None, seconds=float(LENGTH), outputs=None, created="2026-11-20T10:00:00",
+        channel="market-tales", **extra):
     d = home / "runs" / name
     d.mkdir(parents=True, exist_ok=True)
-    state = {"source": f"{home}/videos/{name}.mp4", "channel": "market-tales", "created": created,
-             "done": done, "timings": timings, "seconds": seconds}
+    state = {"source": f"{home}/videos/{name}.mp4", "channel": channel, "created": created,
+             "done": done, "timings": timings, "seconds": seconds, **extra}
     if outputs:
         state["outputs"] = outputs
     (d / "state.json").write_text(json.dumps(state), encoding="utf-8")
@@ -182,4 +183,16 @@ d = run("rooftop-garden", finished, {**before_voice, "voice": 212, "mix": 6}, {"
         seconds=612.0, outputs={"video": f"{home}/runs/rooftop-garden/rooftop-garden.en.mp4", "subtitles": []},
         created="2026-11-18T12:00:00")
 (d / "rooftop-garden.en.mp4").write_bytes(b"")
+
+# Shorts only, on a channel that has no dub language yet: its transcript checked, the Shorts proposed
+clips = home / "channels" / "market-clips"
+clips.mkdir(parents=True, exist_ok=True)
+(clips / "profile.json").write_text(json.dumps({"source_lang": "bg", "target_lang": "", "source_language_name": "Bulgarian",
+                                                "target_language_name": "", "voice_ref": ""}))
+source = home / "videos" / "saturday-market.mp4"
+video(source)
+d = run("saturday-clips", finished[:5], {"prep": 1.1, "separate": 19.8, "transcribe": 12.7, "spelling": 16.2},
+        {"segments.json": segments(False), "shorts/original/candidates.txt": shorts.replace("Shorts candidates", "Shorts candidates (original)")},
+        created="2026-11-21T09:00:00", channel="market-clips", mode="shorts", video=str(source))
+stems(d)
 print("demo home ready:", home)

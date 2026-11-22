@@ -21,6 +21,7 @@ LOCALDUB_HOME=$work/home LOCALDUB_LISTEN=127.0.0.1:8092 LOCALDUB_MODELS_URL=http
   "${CARGO_TARGET_DIR:-$repo/server/target}/debug/localdub-server" 2>"$work/server.log" &
 server=$!
 sleep 1
-mkdir -p "$repo/docs/images"
-(cd "$here" && node shots.mjs http://127.0.0.1:8092 "$repo/docs/images" "$work")
-ls -la "$repo/docs/images"
+out=${OUT:-$repo/docs/images}  # OUT=/tmp/x: somewhere else, e.g. to look before replacing them
+mkdir -p "$out"
+(cd "$here" && node shots.mjs http://127.0.0.1:8092 "$out" "$work")
+ls -la "$out"

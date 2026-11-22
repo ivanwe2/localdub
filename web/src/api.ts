@@ -81,6 +81,15 @@ export interface RunFiles {
   video: string | null;
   subtitles: string[];
   shorts: string[];
+  original: string | null; // the video it was made from, inside the run's folder (an excerpt)...
+  source_video: string | null; // ...or a file in the videos folder (served at /videos/<file>)
+}
+
+/** The URL of the video a run was made from, for previews; null if the server can't serve it. */
+export function originalUrl(run: { name: string; files: RunFiles }): string | null {
+  if (run.files.original) return fileUrl(run.name, run.files.original);
+  if (run.files.source_video) return `/videos/${encodeURIComponent(run.files.source_video)}`;
+  return null;
 }
 
 /** What a run waits for: a file to edit and approve, then the run is continued. */
@@ -99,7 +108,8 @@ export interface RunSummary {
   seconds: number | null;
   done: string[];
   timings: Record<string, number>; // seconds per finished stage
-  finished: boolean;
+  mode: "dub" | "shorts"; // "shorts": no dub, its stages end at review 1, then its Shorts
+  finished: boolean; // the dub is ready (Shorts only: its Shorts are)
   files: RunFiles;
   waiting_for: Waiting | null;
 }
@@ -166,6 +176,8 @@ export interface StartRequest {
   name: string;
   no_review: boolean;
   shorts: number;
+  /** No dub: the transcript, then Shorts in the video's language (`shorts`: how many to render). */
+  shorts_only?: boolean;
   /** A new channel's languages (codes like "bg", "en") and, optionally, its speaker. */
   source?: string;
   target?: string;
@@ -179,9 +191,9 @@ export type Speaker = "man" | "woman";
 export interface Channel {
   name: string;
   source: string;
-  target: string;
+  target: string | null; // null: it has made only Shorts so far (no dub language yet)
   source_name: string;
-  target_name: string;
+  target_name: string | null;
   speaker: Speaker | null;
   has_voice: boolean;
 }
