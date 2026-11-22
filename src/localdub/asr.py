@@ -24,7 +24,7 @@ def transcribe_folder(settings: dict, server, src: Path, out: Path, lang: str, d
         out.mkdir(parents=True)
         got = {}
         for f in sorted(src.glob("*.wav")):
-            got[f.stem] = server.transcribe(settings["asr_model"], f, lang)
+            got[f.stem] = server.transcribe(f, lang)
             (out / f"{f.stem}.json").write_text(json.dumps(got[f.stem], ensure_ascii=False), encoding="utf-8")
         return got
     if nemo["backend"] != "local":

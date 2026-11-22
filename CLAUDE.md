@@ -32,7 +32,8 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 |---|---|
 | `src/localdub/run.py` | CLI, the stages, reviews and learning, `check`, `shorts`, `channel`, `languages` commands |
 | `src/localdub/languages.py` | the language table (name, ISO 639-2, hunspell dict + apt package, num2words code, separators, abbreviations, calibration sentences, spelling hints); what can be dubbed into is the setting `tts_languages` |
-| `src/localdub/llm.py` | llama-swap client: chat (JSON repair, retries), TTS, transcription, separation, unload |
+| `src/localdub/llm.py` | model servers: `Server` (one per server, kind `llama-swap` or `openai`: chat with JSON repair and retries, TTS, transcription, separation, unload) and `Models` (the stages' router, by task: `chat_json("text", …)`, `tts`, `transcribe`, `separate`) |
+| `src/localdub/models.py` | the five tasks (text, vision, voice, hearing, separation) with what each needs, servers per task (`servers`/`tasks` in settings.json; defaults from `llm_url` + `*_model`), keys (`~/dub/keys.json`, 0600), remote-server detection, thinking levels, `overview()` and `try_task()` for `localdub models [--test]` |
 | `src/localdub/text.py` | sentences, spelling guard, translation, shortening |
 | `src/localdub/segments.py` | a segment's text keys are `src`/`tgt`/`model_tgt`; `upgrade()` renames the pre-0.9.0 `bg`/`en`/`model_en` when old runs are read. Review files mark lines with the channel's codes (`review.label`: `BG:`, `EN:`, `DE:`…) |
 | `src/localdub/voice.py` | voice-sample candidates, takes, the take check (`judge`), fitting |
@@ -146,8 +147,12 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
    Skill). Shorts only (engine 0.12.0): `run --shorts-only` (state `mode: "shorts"`, stages up to
    review 1 then `shorts-original`), channels may lack a dub language until their first dub,
    RunSummary `mode` + `files.original`/`source_video` (served at `/videos/<file>`), the reviews
-   switch starts on for a new channel. **Next**: models from any server, then the guides, then a CT
-   103 checkpoint (ask first). Token auth only if LAN use is wanted (until then: SSH tunnel). CT 103
+   switch starts on for a new channel. Models from any server (engine 0.13.0): `localdub models`
+   (list; `--server/--url/--kind/--key-stdin/--remove`, `--set TASK=SERVER/MODEL`, `--effort
+   USE=LEVEL` incl. `default` = no `reasoning_effort`, `--test TASK` → `models_test` event),
+   `check` per task's server, `call` events name their `server`. **Next**: the Models screen
+   (server routes + page), then the guides, then a CT 103 checkpoint (ask first). Token auth only if
+   LAN use is wanted (until then: SSH tunnel). CT 103
    is sometimes used for gaming: ask before running things there.
 5. App image (multi-stage) + docker compose; GPU-side services on CT 103.
 

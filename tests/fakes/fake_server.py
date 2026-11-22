@@ -42,6 +42,7 @@ MODELS = ["gemma4-31b", "gemma4-31b-vision", "qwen3-tts", "nemotron", "demucs", 
 VOICING = {"qwen3-tts", "nemotron"}  # the group that runs side by side; everything else swaps
 running = {"other"}
 voiced = {}  # take hash -> the text voiced, recorded by /tts so a transcribed take can be "heard" back
+last_voiced = [""]  # the latest text voiced, which `localdub models --test hearing` hears back
 part_offset = [0.0]  # where the next partNN.wav starts in the video (parts arrive in order)
 SPELL = {"найемите": "наемите", "ефтината": "евтината", "ефтини": "евтини", "фсички": "всички", "Кирчу": "Кирчо",
          "сирене": "сиренето"}  # the last one changes a valid word: refused by the guard
@@ -117,10 +118,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/models/unload/"):
             running.discard(self.path.rsplit("/", 1)[1])
             return self.send(b"OK", "text/plain")
-        if self.path == "/upstream/qwen3-tts/tts":
+        if self.path in ("/upstream/qwen3-tts/tts", "/tts"):  # through llama-swap, or the TTS server itself
             return self.tts(json.loads(raw))
         if self.path.startswith("/upstream/demucs/"):
-            return self.demucs(raw)
+            return self.demucs(raw, self.path[len("/upstream/demucs"):])
+        if self.path == "/separate":  # the Demucs wrapper itself (an "openai" kind server)
+            return self.demucs(raw, "/separate")
         if self.path == "/v1/audio/transcriptions":
             return self.transcribe(*form(self.headers["Content-Type"], raw))
         if self.path != "/v1/chat/completions":
@@ -129,10 +132,15 @@ class Handler(BaseHTTPRequestHandler):
         load(b["model"])
         system, user = b["messages"][0]["content"], b["messages"][1]["content"]
         with open(STATE / "requests.log", "a", encoding="utf-8") as f:
-            f.write(json.dumps({"model": b["model"], "system": system[:60], "effort": b["reasoning_effort"],
+            f.write(json.dumps({"model": b["model"], "system": system[:60], "effort": b.get("reasoning_effort"),
                                 "user": user if isinstance(user, str) else "[image]"}, ensure_ascii=False) + "\n")
         if system.startswith("You describe video frames"):
             return self.vision(b, user)
+        if system.startswith("You answer in JSON only"):  # localdub models --test text
+            return self.send(chat_reply('{"ok": true, "word": "market"}', tokens=12))
+        if system.startswith("You describe images briefly"):  # localdub models --test vision
+            assert user[1]["image_url"]["url"].startswith("data:image/png;base64,")
+            return self.send(chat_reply('{"colour": "orange"}', tokens=8))
         if system.startswith("You pick moments"):
             return self.pick(user)
         if system.startswith("You translate") and (STATE / "FAIL_TRANSLATE").exists():
@@ -179,6 +187,7 @@ class Handler(BaseHTTPRequestHandler):
             f.write(json.dumps(b["input"], ensure_ascii=False) + "\n")
         ref = hashlib.md5(base64.b64decode(b["speaker_ref_b64"])).hexdigest()  # as voice.take_name does
         voiced[hashlib.md5((ref + b["input"]).encode()).hexdigest()[:8]] = b["input"]
+        last_voiced[0] = b["input"]
         rate = {42: 11.0, 7: 16.0, 1234: 13.0}.get(b["seed"], 14.0)
         n = int(len(b["input"]) / rate * 24000)
         buf = io.BytesIO()
@@ -199,7 +208,10 @@ class Handler(BaseHTTPRequestHandler):
         stem, seconds = filename.rsplit(".", 1)[0], wav_seconds(io.BytesIO(audio))
         with open(STATE / "asr-http.log", "a", encoding="utf-8") as f:
             f.write(filename + "\n")
-        if stem.startswith("part"):
+        if stem == "hearing":  # localdub models --test hearing: the latest voiced text, word by word
+            words = last_voiced[0].split() if seconds > 1.5 else []
+            got = {"text": " ".join(words), "words": [{"word": w, "start": i * 0.4, "end": i * 0.4 + 0.3} for i, w in enumerate(words)]}
+        elif stem.startswith("part"):
             if stem == "part00":
                 part_offset[0] = 0.0
             got = part(WORDS, part_offset[0], seconds)
@@ -208,9 +220,8 @@ class Handler(BaseHTTPRequestHandler):
             got = take(stem, voiced[stem.split("-")[1]], seconds)
         return self.send({"task": "transcribe", "language": fields["language"], "duration": seconds, **got})
 
-    def demucs(self, raw):
+    def demucs(self, raw, rest):
         load("demucs")
-        rest = self.path[len("/upstream/demucs"):]
         req = urllib.request.Request(DEMUCS + rest, data=raw, method="POST",
                                      headers={"Content-Type": self.headers.get("Content-Type", "audio/wav")})
         with urllib.request.urlopen(req, timeout=120) as r:

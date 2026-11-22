@@ -222,7 +222,7 @@ def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedde
             name = take_name(s, seed)
             raw, trim = work / "raw" / f"{name}.wav", work / "trim" / f"{name}.wav"
             if not raw.exists():
-                raw.write_bytes(server.tts(settings["tts_model"], s["tgt"], lang, ref_b64, seed,
+                raw.write_bytes(server.tts(s["tgt"], lang, ref_b64, seed,
                                            label=f"line {s['id']}, take {round_no}"))
                 new += 1
             if name not in checks or not trim.exists():

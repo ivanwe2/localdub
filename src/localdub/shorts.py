@@ -98,11 +98,11 @@ def make_sheets(video: Path, out: Path, every: float, seconds: float) -> list[di
     return sheets
 
 
-def look(sheets: list[dict], cache_path: Path, server, model: str) -> dict:
+def look(sheets: list[dict], cache_path: Path, server) -> dict:
     cache = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
     todo = [s for s in sheets if s["file"] not in cache]
     if todo:
-        log(f"   {model} looks at {len(todo)} images of 4 frames (about {len(todo) * 3 // 60 + 1} min)")
+        log(f"   {server.model('vision')} looks at {len(todo)} images of 4 frames (about {len(todo) * 3 // 60 + 1} min)")
     t0 = time.monotonic()
     for i, s in enumerate(todo, start=1):
         img = base64.b64encode(Path(s["file"]).read_bytes()).decode()
@@ -110,7 +110,7 @@ def look(sheets: list[dict], cache_path: Path, server, model: str) -> dict:
         user = [{"type": "text", "text": prompt},
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img}"}}]
         try:
-            reply = server.chat_json(model, "You describe video frames briefly and factually.", user, "none", 800,
+            reply = server.chat_json("vision", "You describe video frames briefly and factually.", user, "none", 800,
                                      f"frames {i}/{len(todo)}", quiet=i % 10 != 0 and i != len(todo))
         except LLMError as e:  # one unreadable answer costs one image's description, not the run
             log(f"   frames {i}/{len(todo)}: skipped ({e})")
@@ -171,7 +171,7 @@ def timeline(segs: list[dict], vision: dict, mot: dict, lang: str) -> str:
 def select(segs, vision, mot, server, settings, lang: str, language: str) -> list[dict]:
     sh = settings["shorts"]
     system = SELECT_PROMPT.format(n=sh["count"], min_s=sh["min_seconds"], max_s=sh["max_seconds"], language=language)
-    reply = server.chat_json(settings["text_model"], system, timeline(segs, vision, mot, lang), sh["select_effort"],
+    reply = server.chat_json("text", system, timeline(segs, vision, mot, lang), sh["select_effort"],
                              12000, f"choosing {language} Shorts")
     by_id = {s["id"]: s for s in segs}
     order = [s["id"] for s in segs]

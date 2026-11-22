@@ -194,7 +194,7 @@ def spellcheck(segs, server, settings, profile) -> dict:
         user = "\n".join(f"{s['id']}: {text_of(s['words'])}" for s in chunk)
         if names:
             user = "Known names (correct spelling): " + ", ".join(sorted(names)) + "\n\n" + user
-        reply = server.chat_json(settings["text_model"], SPELL_PROMPT.format(lang=lang, hint=spelling_hint(profile["source_lang"])), user,
+        reply = server.chat_json("text", SPELL_PROMPT.format(lang=lang, hint=spelling_hint(profile["source_lang"])), user,
                                  settings["spell_effort"], 4096, f"spelling {chunk[0]['id']}-{chunk[-1]['id']}")
         for fix in reply.get("fixes", []):
             try:
@@ -367,7 +367,7 @@ def translate(segs, server, settings, profile, progress=None) -> None:
                     f"{c['id']}: {c['src']}\n   -> {c.get('tgt', '')}" for c in context))
             parts.append("Translate:\n" + "\n".join(
                 f"{s['id']} [{s['slot']:.1f}s, max {s['budget']} chars]: {s['src']}" for s in todo))
-            reply = server.chat_json(settings["text_model"], system, "\n\n".join(parts),
+            reply = server.chat_json("text", system, "\n\n".join(parts),
                                      settings["translate_effort"], 16384,
                                      f"translating {todo[0]['id']}-{todo[-1]['id']}")
             got = {}
@@ -402,7 +402,7 @@ def shorten_to(items: list[tuple[dict, int]], server, settings, profile, label: 
         return []
     user = "\n".join(f"{s['id']} [max {n} chars, now {len(s['tgt'])}]: {s['tgt']}" for s, n in items)
     try:
-        reply = server.chat_json(settings["text_model"], SHORTEN_PROMPT.format(tgt=profile["target_language_name"]),
+        reply = server.chat_json("text", SHORTEN_PROMPT.format(tgt=profile["target_language_name"]),
                                  user, settings["shorten_effort"], 8192, label)
     except LLMError as e:
         print(f"   shortening failed, keeping the longer lines ({e})", file=sys.stderr)

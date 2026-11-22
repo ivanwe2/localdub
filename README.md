@@ -13,7 +13,7 @@
   <a href="https://github.com/ivanwe2/localdub/actions/workflows/tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/ivanwe2/localdub/tests.yml?branch=main&label=tests&logo=githubactions&logoColor=white&labelColor=16181b" alt="tests"></a>
   <a href="https://github.com/ivanwe2/localdub/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/ivanwe2/localdub/release.yml?branch=main&label=web%20app%20build&logo=githubactions&logoColor=white&labelColor=16181b" alt="web app build"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/ivanwe2/localdub?labelColor=16181b&color=ffb547" alt="MIT license"></a>
-  <img src="https://img.shields.io/badge/runs-100%25%20local-ff5b2e?labelColor=16181b" alt="runs 100% local">
+  <img src="https://img.shields.io/badge/runs-local%20by%20default-ff5b2e?labelColor=16181b" alt="runs locally by default">
   <img src="https://img.shields.io/badge/languages-26%20in%20%C2%B7%207%20out-ffb547?labelColor=16181b" alt="26 video languages, 7 dub languages">
   <br>
   <img src="https://img.shields.io/badge/engine-Python%203.10%2B-3776ab?logo=python&logoColor=white&labelColor=16181b" alt="Python 3.10+">
@@ -28,9 +28,10 @@
 
 localdub takes a video and gives it back in another language. The speaker's own cloned voice says
 the translation, each line where they said the original, over the video's untouched music and
-effects. Then it cuts vertical Shorts from the best moments. Every model runs on your own machines:
-no uploads, no per-minute fees, nobody else's servers. On two 16 GB consumer GPUs a 30-minute video
-takes about 30 minutes.
+effects. Then it cuts vertical Shorts from the best moments. Out of the box every model runs on your
+own machines: no uploads, no per-minute fees, nobody else's servers (and if you want, any task can use
+another server, cloud APIs included). On two 16 GB consumer GPUs a 30-minute video takes about 30
+minutes.
 
 > [!IMPORTANT]
 > **Consent.** Only clone the voice of someone who has agreed to it, and only process videos you
@@ -181,6 +182,10 @@ localdub shorts NAME [--lang dub|original] [--auto N] [--redo select|vision]
 localdub voice NAME [--pick N|current|MM:SS-MM:SS]
                                                  compare voice samples from a run, pick one
 localdub channel NAME [--speaker man|woman|none] a channel's settings
+localdub models                                  which model does each task, on which server
+          [--set TASK=SERVER/MODEL] [--effort USE=LEVEL] [--test TASK]
+localdub models --server NAME --url URL [--kind openai] [--key-stdin] [--remove]
+                                                 add or change a server (any OpenAI-compatible one)
 ```
 
 Exit codes: 0 done, 3 waiting for a human, 1 error.
@@ -227,6 +232,34 @@ separates, transcribes and spell-checks (one review, the transcript, which becom
 none with `--no-review`), then proposes Shorts in the video's language. A new channel then needs only
 its video language (`--from`); it gets its dub language on its first dub (`--to`, once).
 
+### Models: which one does what, and where
+
+Five tasks use models; each is one model on one server, set with `localdub models` (or the page's
+*Models* screen, which also explains what each needs):
+
+| Task | What it does | Needs |
+|---|---|---|
+| text | spelling fixes, the translation, shortening, choosing Shorts | a chat model (`/v1/chat/completions`) that answers in JSON; big and good in both languages |
+| vision | watches the video for Shorts | a chat model that takes images |
+| voice | the cloned voice | Qwen3-TTS on llama.cpp's TTS server (`/tts`) |
+| hearing | the transcript with word times, and the take check | `/v1/audio/transcriptions` with word timestamps (Nemotron, Whisper) |
+| separation | the voice apart from music and effects | `deploy/gpu/demucs_server.py` (`/separate`) |
+
+A server is a URL, a key and a kind: `llama-swap` (the default server `main` is `llm_url`; it reaches
+the TTS and Demucs servers through `/upstream/<model>/`) or `openai`, any OpenAI-compatible server
+(local ones like LM Studio, vLLM or Ollama, or a cloud API; its TTS or Demucs server is called
+directly). Keys come from `--key-stdin` (kept in `~/dub/keys.json`, readable only by you, never
+printed) or from a server's `key_env` / `key_file`. A server outside your network gets a warning:
+frames, transcripts and voice samples are sent there. `--effort translate=low` makes the translation
+think less (several times faster; `medium` is the default, `default` lets the server decide).
+`--test voice` tries a task with one small real request.
+
+```
+localdub models --server cloud --url https://api.example.com --kind openai --key-stdin < key.txt
+localdub models --set text=cloud/some-model --effort translate=default
+localdub models --test text
+```
+
 ### For scripts, servers and agents: `--json`
 
 Every command takes `--json`. Messages for people stay on stderr; stdout then carries one JSON object
@@ -261,7 +294,8 @@ video). See `src/localdub/events.py`.
   **DejaVu Sans**; for picking the voice by likeness also `transformers` (`.[voice]`, CPU).
 
 Settings: create `~/dub/settings.json` with just the keys that differ from `src/localdub/settings.py`,
-e.g. `{"llm_url": "http://gpu-box:9876", "translate_effort": "low"}`. The API key comes from
+e.g. `{"llm_url": "http://gpu-box:9876", "translate_effort": "low"}` (`localdub models` writes its
+`servers`, `tasks` and thinking levels there for you). The main server's API key comes from
 `$LLAMA_API_KEY` or the `LLAMA_API_KEY=` line of `/etc/llama.env`. To run Nemotron or Demucs on the
 same machine as localdub instead of behind the server, set `"nemo": {"backend": "local"}` or
 `"demucs": {"backend": "local"}` (paths and devices are in the same sections); localdub then frees
