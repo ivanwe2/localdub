@@ -89,6 +89,12 @@ minutes.
     <td><b>Watch it work.</b> Tokens per second on LED meters, both GPUs live, every model request listed. Dark or light, following your system.</td>
   </tr>
   <tr>
+    <td colspan="2"><img src="docs/images/fix-line.png" alt="Fix a line: the lines worth a listen under the timeline; one open with the original and the dub to play, its words to change and Another take"></td>
+  </tr>
+  <tr>
+    <td colspan="2"><b>Fix one line, not the whole dub.</b> The lines worth a listen (failed checks, lines that run long) under the timeline, or any line from it: hear the original and the dub, change the words or ask for another take. Only that line is voiced again, the dub re-mixed and its Shorts re-rendered, in a minute or two.</td>
+  </tr>
+  <tr>
     <td colspan="2" align="center"><img src="docs/images/phone.png" width="300" alt="The studio on a phone"><br><b>On a phone, too.</b></td>
   </tr>
 </table>
@@ -192,6 +198,8 @@ localdub run NAME --redo STAGE                   redo from a stage on
 localdub shorts NAME [--lang dub|original] [--auto N] [--redo select|vision]
 localdub voice NAME [--pick N|current|MM:SS-MM:SS]
                                                  compare voice samples from a run, pick one
+localdub line NAME ID [--text "..."] [--new-take]
+                                                 fix one line of a finished dub (show it without options)
 localdub channel NAME [--speaker man|woman|none] a channel's settings
 localdub models                                  which model does each task, on which server
           [--set TASK=SERVER/MODEL] [--effort USE=LEVEL] [--test TASK]
@@ -376,6 +384,7 @@ The API:
 | `POST` / `GET /api/runs/<run>/voice` | make voice samples from the run's speech (with test clones, and of the channel's voice now); read them |
 | `POST /api/runs/<run>/voice/pick` | make one the channel's voice: `{"pick": 2}` or `{"pick": "current"}` |
 | `POST /api/runs/<run>/revoice` | dub a finished run again with the channel's voice |
+| `POST /api/runs/<run>/lines/<id>` | fix one line of a finished dub: `{"text": "…"}` and/or `{"new_take": true}` (the words go to the engine on stdin) |
 | `GET /api/runs/<run>/waveform` | how loud the speaker's voice and the music are along the video (600 steps, 0–100), for the timeline |
 | `GET /api/videos`, `PUT /api/videos/<file>` | the uploaded and downloaded videos; upload one (the body is the file) |
 | `POST /api/downloads` | download a video from a link with yt-dlp: `{"url": "https://…"}` (one at a time, beside a run) |

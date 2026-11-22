@@ -121,6 +121,20 @@ localdub run talk --redo voice          # dub the run again with it
 the speaker (`runs/talk/voice-candidates/`): listen, then pick. Differences under 0.01 are noise;
 trust your ear. A pick changes the channel's voice for every future run.
 
+### Fix one line after the dub
+
+```
+localdub line talk 31                                     # show line 31: both texts, what the check heard, how it fits
+localdub line talk 31 --text "The market opens at six."   # new words: voiced, checked, the dub mixed again
+localdub line talk 31 --new-take                          # the same words, voiced again with new seeds
+localdub line talk 31 --text ""                           # leave the line silent
+```
+
+`check.txt` lists the lines worth a listen (failed checks, lines that run long). A fix voices only that
+line, mixes the dub again (a minute or two) and renders again the dubbed Shorts the line is in. New
+words are remembered by the channel, as review 2 edits are. In the web app: *Fix a line* under the
+timeline of a finished dub, or click a line on the timeline.
+
 ### After an error
 
 ```
@@ -159,6 +173,7 @@ All of them take `--json`.
 | `localdub run NAME [--redo STAGE]` | continue a run (or redo from a stage on) |
 | `localdub shorts NAME [--lang dub\|original] [--auto N] [--redo select\|vision]` | propose Shorts from a finished run, then render the ticked ones |
 | `localdub voice NAME [--pick N\|current\|MM:SS-MM:SS\|file.wav]` | compare voice samples from a run, pick one for the channel |
+| `localdub line NAME ID [--text WORDS \| --text-stdin] [--new-take]` | show one line of a finished dub, or fix it: new words or another take; the dub and its dubbed Shorts are made again |
 | `localdub channel NAME [--speaker man\|woman\|none]` | a channel's languages, speaker and voice; change the speaker |
 | `localdub models [--server NAME --url URL --kind K --key-stdin \| --remove] [--set TASK=SERVER/MODEL…] [--effort USE=LEVEL…] [--test TASK]` | which model does each task, on which server; change them; try one |
 | `localdub guide` | the guide for AI agents |
