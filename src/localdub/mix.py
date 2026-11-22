@@ -8,7 +8,7 @@ import numpy as np
 
 from . import media
 from .text import text_of
-from .voice import RATE, read_audio
+from .voice import RATE, read_audio, script_times
 
 
 def place(segs: list[dict], total_s: float, dst: Path, max_delay: float = 1.0, gap: float = 0.08) -> dict:
@@ -104,18 +104,30 @@ def _write(path: Path, cues: list[tuple[float, float, str]]) -> None:
                               for i, (a, b, t) in enumerate(cues, start=1)), encoding="utf-8")
 
 
-def subtitles(segs: list[dict], src_path: Path, tgt_path: Path) -> None:
+def _cues(words: list[dict], offset: float = 0.0) -> list[tuple[float, float, str]]:
+    """Timed words as cues of up to two lines, each from its first word's start to its last word's end."""
+    cues, cur = [], []
+    for w in words:
+        if cur and len(_wrap(text_of(cur + [w]))) > 2:
+            cues.append((offset + cur[0]["start"], offset + cur[-1]["end"], "\n".join(_wrap(text_of(cur)))))
+            cur = []
+        cur.append(w)
+    if cur:
+        cues.append((offset + cur[0]["start"], offset + cur[-1]["end"], "\n".join(_wrap(text_of(cur)))))
+    return cues
+
+
+def subtitles(segs: list[dict], src_path: Path, tgt_path: Path, lang: str = "en") -> None:
+    """Both subtitle files: the original's cues follow its word times; the dub's follow the times the take
+    check heard its words (`lang`: the dub's language), or share the take by length for older takes."""
     src, tgt = [], []
     for s in segs:
-        cur = []
-        for w in s["words"]:  # source cues follow the word times
-            if cur and len(_wrap(text_of(cur + [w]))) > 2:
-                src.append((cur[0]["start"], cur[-1]["end"], "\n".join(_wrap(text_of(cur)))))
-                cur = []
-            cur.append(w)
-        if cur:
-            src.append((cur[0]["start"], cur[-1]["end"], "\n".join(_wrap(text_of(cur)))))
+        src += _cues(s["words"])
         if not s.get("tgt", "").strip():
+            continue
+        if s.get("take") and s["take"].get("words"):
+            tgt += _cues(script_times(s["tgt"], s["take"]["words"], lang, s["take"]["seconds"]),
+                         s.get("placed", s["start"]))
             continue
         # target cues: from where the dub line starts for as long as it speaks, shared out by length
         begin = s.get("placed", s["start"])

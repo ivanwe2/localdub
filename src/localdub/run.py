@@ -660,7 +660,7 @@ def stage_mix(run: Run, ctx: Ctx):
                  ctx.settings["lufs"])
     out = run.p(f"{run.name}.{tgt_l}.mp4")
     mux(Path(run.state["video"]), run.p("dub-mix.wav"), out, iso3(tgt_l), iso3(src_l))
-    subtitles(segs, run.p(f"{run.name}.{src_l}.srt"), run.p(f"{run.name}.{tgt_l}.srt"))
+    subtitles(segs, run.p(f"{run.name}.{src_l}.srt"), run.p(f"{run.name}.{tgt_l}.srt"), tgt_l)
     n = write_checklist(run.p("check.txt"), segs, out, ctx.profile["target_lang"])
     run.state["outputs"] = {"video": str(out), "subtitles": [str(run.p(f"{run.name}.{tgt_l}.srt")),
                                                             str(run.p(f"{run.name}.{src_l}.srt"))],
@@ -1096,13 +1096,15 @@ def render_shorts(run: Run, settings: dict, lang: str, picked: list[dict], langu
     from . import shorts as sh
     out_dir = run.p("shorts") / lang
     video = Path(run.state["video"] if lang == "original" else run.state["outputs"]["video"])
+    profile = Profile(run.state["channel"])
+    code = profile["source_lang"] if lang == "original" else profile["target_lang"]
     segs = run.segs
     log(f"   rendering {len(picked)} {language} Shorts from {video.name}")
     made = []
     for pick in picked:
         out = out_dir / f"short-{pick['n']}-{sh.slug(pick['title'])}.mp4"
         t0 = time.monotonic()
-        sh.render(video, segs, pick, out, out_dir, settings["shorts"]["title"], lang)
+        sh.render(video, segs, pick, out, out_dir, settings["shorts"]["title"], lang, code)
         made.append(str(out))
         log(f"   {out.name}: {media.duration(out):.0f}s, rendered in {time.monotonic() - t0:.0f}s")
     return made

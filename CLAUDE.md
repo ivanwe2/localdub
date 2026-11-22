@@ -170,8 +170,6 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 - Voice: dubbed voice can sound accented ("a bit Indian") in English. Ideas: the speaker-similarity
   choice (built, verify on CT 103), a second TTS engine compared automatically (Qwen3-TTS through
   its own package with the sample's transcript; llama.cpp `/tts` takes audio only), other models.
-- Dub captions in Shorts are timed by character share; use the word times Nemotron already returns
-  for each take.
 - Distant/quiet speech is missed: try transcribing the levelled vocals stem; flag "voice but no words".
 - Review 1 lists too much on full videos (~12% unknown words); fix one line without approving all
   of review 2; `--fast` mode (translation thinking off).

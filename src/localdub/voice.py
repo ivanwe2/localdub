@@ -170,6 +170,50 @@ def judge(script: str, heard: str, lang: str = "en") -> tuple[bool, float, str]:
     return True, w, ""
 
 
+def script_times(script: str, heard: list[dict], lang: str, seconds: float) -> list[dict]:
+    """The script's words with the times they're spoken in a take: [{"word", "start", "end"}], in the take's
+    time. The words the check heard (with their times) are matched to the script's word by word, after
+    normalize() on both sides (numbers spelled out, abbreviations as spoken); a script word the recogniser
+    heard differently takes the time of what it heard in its place, one it missed is fitted in between
+    its neighbours by length. Captions show the script, never the recogniser's spelling."""
+    words = script.split()
+    if not words:
+        return []
+    src = [(i, t) for i, w in enumerate(words) for t in normalize(w, lang)]  # (script word, token)
+    got = [(float(h["start"]), float(h["end"]), t) for h in heard for t in normalize(str(h["word"]), lang)]
+    times: list[list[float]] = [[] for _ in words]  # the heard times of each script word's tokens
+    ops = difflib.SequenceMatcher(None, [t for _, t in src], [t for *_, t in got], autojunk=False).get_opcodes()
+    for op, a1, a2, b1, b2 in ops:
+        if op == "equal" or (op == "replace" and a2 - a1 == b2 - b1):
+            for k in range(a2 - a1):
+                times[src[a1 + k][0]] += got[b1 + k][:2]
+        elif op == "replace":  # different counts: share what was heard there among the script's words
+            start, end = got[b1][0], got[b2 - 1][1]
+            span = [src[k][0] for k in range(a1, a2)]
+            for n, i in enumerate(span):
+                times[i] += [start + (end - start) * n / len(span), start + (end - start) * (n + 1) / len(span)]
+    out = [{"word": w, "start": min(t) if t else None, "end": max(t) if t else None} for w, t in zip(words, times)]
+    # the words without a time: fitted between the timed ones around them, by length
+    i = 0
+    while i < len(out):
+        if out[i]["start"] is not None:
+            i += 1
+            continue
+        j = i
+        while j < len(out) and out[j]["start"] is None:
+            j += 1
+        lo = out[i - 1]["end"] if i > 0 else 0.0
+        hi = out[j]["start"] if j < len(out) else max(seconds, lo)
+        total = sum(len(out[k]["word"]) for k in range(i, j))
+        t = lo
+        for k in range(i, j):
+            d = (hi - lo) * len(out[k]["word"]) / total
+            out[k]["start"], out[k]["end"] = round(t, 3), round(t + d, 3)
+            t += d
+        i = j
+    return out
+
+
 # --- voicing ----------------------------------------------------------------------------------------------
 
 def take_name(s: dict, ref_md5: str, seed: int) -> str:
@@ -253,8 +297,12 @@ def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedde
             for s in pending:
                 name = take_name(s, ref_md5, seed)
                 if name in to_check:
-                    checks[name] = {"heard": got.get(name, {}).get("text", ""),
-                                    "dur": round(media.duration(work / "trim" / f"{name}.wav"), 3)}
+                    heard = got.get(name, {})
+                    checks[name] = {"heard": heard.get("text", ""),
+                                    "dur": round(media.duration(work / "trim" / f"{name}.wav"), 3),
+                                    # each word heard and when, in the trimmed take: for the dub's captions
+                                    "words": [[str(w["word"]), round(float(w["start"]), 3), round(float(w["end"]), 3)]
+                                              for w in heard.get("words") or [] if str(w.get("word", "")).strip()]}
             if want > 1:  # how much each new take sounds like the speaker
                 from .speaker import embed_files, similarity
                 for name, e in zip(to_check, embed_files(embedder, [work / "trim" / f"{x}.wav" for x in to_check])):
@@ -268,7 +316,8 @@ def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedde
             if want > 1 and "sim" not in c:  # checked before similarity was on
                 from .speaker import embed_files, similarity
                 c["sim"] = checks[name]["sim"] = similarity(embed_files(embedder, [work / "trim" / f"{name}.wav"])[0], vp)
-            c = {"ok": ok, "wer": round(w, 3), "why": why, "heard": c["heard"], "dur": c["dur"], "sim": c.get("sim")}
+            c = {"ok": ok, "wer": round(w, 3), "why": why, "heard": c["heard"], "dur": c["dur"], "sim": c.get("sim"),
+                 "words": c.get("words")}
             takes[s["id"]].append({"seed": seed, **c, "file": str(work / "trim" / f"{name}.wav")})
             if not done(s):
                 still.append(s)
@@ -309,9 +358,11 @@ def voice_all(segs, run_dir: Path, server, settings, profile, lang: str, embedde
                 action += f", OVER by {after - slot:.1f}s"
         else:
             shutil.copyfile(src, fit)
+        seconds = round(media.duration(fit), 3)
+        scale = seconds / d if d > 0 else 1.0  # sped up: every word comes sooner by as much
+        words = [{"word": w, "start": round(a * scale, 3), "end": round(b * scale, 3)} for w, a, b in best["words"]]             if best.get("words") else None  # takes checked before 0.16.0 have no word times
         s["take"] = {"seed": best["seed"], "ok": best["ok"], "wer": best["wer"], "why": best["why"],
                      "heard": best["heard"], "tries": len(options), "fit": action, "spoken": d,
-                     "sim": best.get("sim"),
-                     "seconds": round(media.duration(fit), 3), "file": str(fit)}
+                     "sim": best.get("sim"), "seconds": seconds, "file": str(fit), "words": words}
         report.append({"id": s["id"], **s["take"]})
     return report
