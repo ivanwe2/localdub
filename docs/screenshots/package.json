@@ -1,0 +1,9 @@
+{
+  "name": "localdub-screenshots",
+  "private": true,
+  "type": "module",
+  "description": "The README's screenshots from a made-up demo: sh shots.sh",
+  "dependencies": {
+    "playwright": "1.65.1"
+  }
+}

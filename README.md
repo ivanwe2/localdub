@@ -1,28 +1,108 @@
-# localdub
+<p align="center">
+  <img src="web/public/favicon.svg" width="84" alt="">
+</p>
 
-Dub a video into another language in the creator's own cloned voice, keep the original music and
-effects, and cut Shorts from it, in the dubbed language or the original. Everything runs on your
-own GPUs: no cloud APIs.
+<h1 align="center">localdub</h1>
 
-```
-localdub run video.mp4 --channel mychannel --from bg --to en
-                                                           a new channel: its video and dub languages;
-                                                           dub it, stopping twice for your review
-localdub run video.mp4 --channel mychannel --no-review --shorts 3
-                                                           the next video: everything in one go, plus
-                                                           the top 3 Shorts in each language
-```
+<p align="center">
+  <b>Dub your videos into another language, in your own voice.</b><br>
+  The same speaker, the original soundtrack, timed to the second. On your own GPUs, no cloud.
+</p>
 
-It is a command-line tool on purpose: a person, a script or an AI agent can drive it the same way
-(exit codes: 0 done, 3 waiting for a human, 1 error). There is also a web app on top of the same
-commands (a Rust server and a React page, see [The web app](#the-web-app)): start a run, watch its
-progress live, watch and download the results.
+<p align="center">
+  <a href="https://github.com/ivanwe2/localdub/actions/workflows/tests.yml"><img src="https://img.shields.io/github/actions/workflow/status/ivanwe2/localdub/tests.yml?branch=main&label=tests&logo=githubactions&logoColor=white&labelColor=16181b" alt="tests"></a>
+  <a href="https://github.com/ivanwe2/localdub/actions/workflows/release.yml"><img src="https://img.shields.io/github/actions/workflow/status/ivanwe2/localdub/release.yml?branch=main&label=web%20app%20build&logo=githubactions&logoColor=white&labelColor=16181b" alt="web app build"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/ivanwe2/localdub?labelColor=16181b&color=ffb547" alt="MIT license"></a>
+  <img src="https://img.shields.io/badge/runs-100%25%20local-ff5b2e?labelColor=16181b" alt="runs 100% local">
+  <img src="https://img.shields.io/badge/languages-26%20in%20%C2%B7%207%20out-ffb547?labelColor=16181b" alt="26 video languages, 7 dub languages">
+  <br>
+  <img src="https://img.shields.io/badge/engine-Python%203.10%2B-3776ab?logo=python&logoColor=white&labelColor=16181b" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/server-Rust%20%C2%B7%20axum-dea584?logo=rust&logoColor=white&labelColor=16181b" alt="Rust, axum">
+  <img src="https://img.shields.io/badge/page-React%20%C2%B7%20TypeScript-61dafb?logo=react&logoColor=white&labelColor=16181b" alt="React, TypeScript">
+  <img src="https://img.shields.io/github/last-commit/ivanwe2/localdub?labelColor=16181b&color=a19c94" alt="last commit">
+</p>
 
+<p align="center">
+  <img src="docs/images/studio.gif" width="900" alt="The localdub studio while a run is voiced: the video as editing-timeline tracks (the original voice, both texts, the dub filling in line by line, the music), with the stages and clocks above">
+</p>
+
+localdub takes a video and gives it back in another language. The speaker's own cloned voice says
+the translation, each line where they said the original, over the video's untouched music and
+effects. Then it cuts vertical Shorts from the best moments. Every model runs on your own machines:
+no uploads, no per-minute fees, nobody else's servers. On two 16 GB consumer GPUs a 30-minute video
+takes about 30 minutes.
+
+> [!IMPORTANT]
 > **Consent.** Only clone the voice of someone who has agreed to it, and only process videos you
 > have the rights to. YouTube lists "cloning one's own voice to create voice overs or dubs" among the
 > uses that don't need an AI disclosure label, which covers creators dubbing their own videos.
 
+## Why it sounds like the speaker, not like AI
+
+- **The speaker's voice, not a stock voice.** The voice is cloned from the speaker's own speech in
+  the video. A speaker-verification model picks the sample, and then every take, that sounds most
+  like them. You can always compare by ear and pick another.
+- **The soundtrack stays.** Demucs splits the voice from the music and effects; only the voice is
+  replaced, levelled like the original.
+- **Timed to the original.** Each sentence gets a length budget from how long the speaker took to say
+  it. Lines too long in every take are shortened and voiced again, so the dub never races or drags.
+- **Every line is listened to.** Each take is transcribed back by a second model and checked against
+  the script: wrong words, clipped endings, takes that don't fit their slot are voiced again with
+  another seed.
+- **It learns your channel.** Spelling fixes, names, a glossary and every approved line feed the next
+  video, so the second video needs fewer fixes than the first.
+- **Shorts on the side.** A vision model watches the video, then the strongest 25-60 s stretches are
+  proposed: they stand alone, hook early and end on a payoff. Rendered 9:16 with big captions, in the
+  dub or the original language.
+- **Yours to automate.** One command-line tool with JSON events and plain exit codes, so a person, a
+  script or an AI agent can drive it. The web app is built on the same commands.
+
+## A look inside
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/review.png" alt="Review 1: the transcript's doubtful lines with one-click fixes for names and spellings"></td>
+    <td width="50%"><img src="docs/images/voices.png" alt="Voices: three samples from the video and the channel's voice, each scored and with four test sentences to play"></td>
+  </tr>
+  <tr>
+    <td><b>Review the transcript.</b> Only the doubtful lines: names, unknown words, the model's fixes, each one click.</td>
+    <td><b>Pick the voice.</b> Samples from the video, scored by how much their clones sound like the speaker. Your ear decides close calls.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/shorts.png" alt="Shorts: AI-ranked candidates as markers on the whole video, a 9:16 preview with captions, cuts moved a sentence at a time"></td>
+    <td><img src="docs/images/new-run.png" alt="New run: upload a video, download one from a link or use one on the box; choose the channel and its languages"></td>
+  </tr>
+  <tr>
+    <td><b>Pick the Shorts.</b> Ranked candidates on a timeline of the whole video, a 9:16 preview, cuts that move a sentence at a time.</td>
+    <td><b>Start a run.</b> Upload a video, paste a link, or use one already on the box. One channel per voice and language pair.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/studio-light.png" alt="The studio in light mode, with the AI console's speed meters and the GPUs"></td>
+    <td align="center"><img src="docs/images/phone.png" width="300" alt="The studio on a phone"></td>
+  </tr>
+  <tr>
+    <td><b>Watch it work.</b> Tokens per second on LED meters, both GPUs live, every model request listed.</td>
+    <td><b>Dark or light, desk or phone.</b> It follows your system.</td>
+  </tr>
+</table>
+
+<sub>Screenshots from a made-up demo (`docs/screenshots/`): no real video, speech or voice.</sub>
+
 ## How it works
+
+```mermaid
+flowchart LR
+  video([video]) --> separate[separate<br>Demucs]
+  separate --> transcribe[transcribe<br>Nemotron]
+  transcribe --> spelling[spelling<br>Gemma + hunspell]
+  spelling --> review1{{review 1}}
+  review1 --> translate[translate<br>Gemma]
+  translate --> review2{{review 2}}
+  review2 --> voice[voice<br>Qwen3-TTS, checked by Nemotron]
+  voice --> mix[mix<br>ffmpeg]
+  mix --> dub([dubbed video + subtitles])
+  mix --> shorts([Shorts<br>Gemma vision])
+```
 
 | Stage | What happens | Model / tool |
 |---|---|---|
@@ -30,11 +110,14 @@ progress live, watch and download the results.
 | separate | split the voice from the music and effects, so the dub can replace the voice and keep the rest | Demucs `htdemucs_ft` |
 | transcribe | every word with its time; long videos in parts of up to 25 min, cut at pauses | Nemotron 3.5 Transcribe via NeMo-Speech.cpp |
 | spelling | words → sentences by their times; spelling fixes, allowed **only** for words hunspell says are misspelled, so real words are never "corrected" | Gemma 4 31B (llama.cpp) |
-| **review 1** | you check the doubtful lines and choose the voice sample | a text file |
+| **review 1** | you check the doubtful lines and choose the voice sample | the page, or a text file |
 | translate | whole sentences, 20 at a time with context; each gets a length budget from how long the speaker took to say it; the channel's names, glossary and past approved lines are given as examples | Gemma 4 31B |
-| **review 2** | you check the translation | a text file |
+| **review 2** | you check the translation | the page, or a text file |
 | voice | every line in the speaker's cloned voice; each take is transcribed back and checked; takes that fail, don't fit, or sound less like the speaker are replaced by another seed; lines too long in every take are shortened and voiced again | Qwen3-TTS (llama.cpp), Nemotron, WavLM |
 | mix | lines placed where the speaker spoke (a line may start up to 1 s late so it never talks over the one before), the voice levelled like the original, laid over the music; video with the dub as the default track and the original as the second; subtitles | ffmpeg, numpy |
+
+The reviews are optional: `--no-review` (or leaving the switch off in the page) runs straight
+through and picks the voice by its score.
 
 **Choosing the voice.** A speaker-verification model (WavLM x-vectors) turns a few seconds of speech
 into a fingerprint; recordings of the same person point in nearly the same direction, whatever the
@@ -46,14 +129,39 @@ language. localdub builds the speaker's voiceprint from their real speech in the
 
 The score shortlists, the ear decides close calls: `localdub voice RUN` makes the candidates from any
 transcribed run, together with test clones of the channel's voice now, so they can be heard side by
-side (in the web app: *Voice…* on a run); `localdub voice RUN --pick 2` (or `current`, or a stretch
-like `01:20-01:38`) makes one the channel's voice, and `localdub run RUN --redo voice` re-dubs a
-finished run with it.
+side (in the web app: *Voices*); `localdub voice RUN --pick 2` (or `current`, or a stretch like
+`01:20-01:38`) makes one the channel's voice, and `localdub run RUN --redo voice` re-dubs a finished
+run with it.
 
 **Learning per channel.** Approved reviews teach the channel (`~/dub/channels/NAME/`): spelling
 corrections you made or kept are applied next time without asking, unknown words you left are
 accepted, names and the glossary go to the translator, and every approved line becomes an example
 for future translations (`memory.jsonl`). `--no-review` runs learn nothing.
+
+## Get started
+
+**You need** a GPU machine running [llama-swap](https://github.com/mostlygeek/llama-swap) with the
+models localdub uses (Gemma 4 31B text and vision, Qwen3-TTS, Nemotron 3.5 Transcribe, Demucs; see
+[deploy/gpu/README.md](deploy/gpu/README.md)), and on the machine where localdub runs: Python ≥ 3.10,
+ffmpeg with libass, hunspell, DejaVu Sans. It was built and runs on a Proxmox LXC with 2× RTX 5060 Ti
+16 GB.
+
+```
+git clone https://github.com/ivanwe2/localdub ~/localdub
+VENV=~/venvs/demucs-gpu bash ~/localdub/deploy/install.sh     # also every language's spelling dictionary
+localdub check                                                # is everything in place?
+
+localdub run video.mp4 --channel mychannel --from bg --to en  # a new channel: dub it, stopping twice for review
+localdub run video2.mp4 --channel mychannel --no-review --shorts 3
+                                                              # the next video in one go, plus 3 Shorts per language
+```
+
+For the web app on the same machine (as root), then from your laptop through an SSH tunnel:
+
+```
+bash ~/localdub/deploy/update.sh                     # engine, yt-dlp and the latest web app build
+ssh -N -L 8080:127.0.0.1:8080 root@gpu-box           # laptop, then open http://localhost:8080
+```
 
 ## Commands
 
@@ -73,6 +181,8 @@ localdub voice NAME [--pick N|current|MM:SS-MM:SS]
 localdub channel NAME [--speaker man|woman|none] a channel's settings
 ```
 
+Exit codes: 0 done, 3 waiting for a human, 1 error.
+
 ### Languages
 
 A channel dubs from one language into another, set on its first run (`--from bg --to en`) and fixed
@@ -89,8 +199,8 @@ nothing else uses it.
 
 ### The two reviews
 
-A run stops at each review and prints the file to edit; change its first line to `status: approved`
-and run `localdub run NAME` again.
+A run stops at each review. In the web app you edit it line by line; on the command line it prints
+the file to edit: change its first line to `status: approved` and run `localdub run NAME` again.
 
 - **Review 1, the transcript**: only doubtful lines (new automatic fixes, guessed names, unknown
   words). On a channel's first video it lists the candidate voice samples with their "sounds like
@@ -105,10 +215,10 @@ and run `localdub run NAME` again.
 From a finished run: ffmpeg measures shot cuts and movement; Gemma looks at the video (a frame every
 4 s, four per image) and rates how interesting each stretch is to watch; then Gemma reads the speech
 with what's on screen and proposes 6 candidates of 25-60 s that stand alone, hook early and end on a
-payoff, strongest first. Mark the ones you want in `shorts/<lang>/candidates.txt` (or `--auto N`).
-Each Short is 1080x1920: the full frame over a blurred copy of itself, the title on top and big
-burned-in captions. `--lang original` cuts from the original audio with captions timed by the real
-word timestamps, in whatever language the channel speaks.
+payoff, strongest first. Mark the ones you want in `shorts/<lang>/candidates.txt` (or `--auto N`, or
+tick them in the page). Each Short is 1080x1920: the full frame over a blurred copy of itself, the
+title on top and big burned-in captions. `--lang original` cuts from the original audio with captions
+timed by the real word timestamps, in whatever language the channel speaks.
 
 ### For scripts, servers and agents: `--json`
 
@@ -133,8 +243,6 @@ video). See `src/localdub/events.py`.
 
 ## Requirements
 
-Built and run on a Proxmox LXC with 2× RTX 5060 Ti 16 GB; a 30-minute video takes about 30 minutes.
-
 - **A model server: [llama-swap](https://github.com/mostlygeek/llama-swap)** on a GPU machine with
   the models localdub uses: Gemma 4 31B (text and vision) and Qwen3-TTS on llama.cpp, Nemotron 3.5
   Transcribe on `nemo-speech serve`, and Demucs through the small wrapper in `deploy/gpu/`. llama-swap
@@ -143,8 +251,7 @@ Built and run on a Proxmox LXC with 2× RTX 5060 Ti 16 GB; a 30-minute video tak
   channel's video language (`localdub languages --apt de` names the Debian packages; `deploy/install.sh`
   installs every language's, about 85 MB in all, or `LANGS="de fr"` only those plus the channels'; a
   run without its dictionary stops before any GPU work, makes no channel, and says what to install),
-  **DejaVu Sans**; for picking the voice by
-  likeness also `transformers` (`.[voice]`, CPU).
+  **DejaVu Sans**; for picking the voice by likeness also `transformers` (`.[voice]`, CPU).
 
 Settings: create `~/dub/settings.json` with just the keys that differ from `src/localdub/settings.py`,
 e.g. `{"llm_url": "http://gpu-box:9876", "translate_effort": "low"}`. The API key comes from
@@ -153,18 +260,29 @@ same machine as localdub instead of behind the server, set `"nemo": {"backend": 
 `"demucs": {"backend": "local"}` (paths and devices are in the same sections); localdub then frees
 the GPUs before running them.
 
-## Install
-
-```
-git clone https://github.com/ivanwe2/localdub ~/localdub
-VENV=~/venvs/demucs-gpu bash ~/localdub/deploy/install.sh     # also: run it again to update
-localdub check
-```
-
 ## The web app
 
 `server/` is a Rust server (axum) that runs `localdub ... --json` for you, one run at a time, and
-`web/` is the page it serves. Run it on the machine where localdub runs, so both see the same files:
+`web/` is the page it serves. In the page you upload a video, download one from a link (YouTube and
+the other sites yt-dlp knows; it lands in the videos folder as `yt-<id>-<title>.mp4`, up to 1080p,
+and runs beside a dub; links to other pages or files, and into the machine or the local network, are
+refused), or give a path inside the home folder; then start a run and follow it live: the run on air
+is shown as editing-timeline tracks (the speaker's voice, both texts, the dub as it is voiced, the
+music), with its stages, clocks, the AI's speed on LED meters, and the GPUs. The reviews are edited
+line by line (one-click fixes for names and spellings, character budgets, the glossary; or as text),
+voices are compared by ear and by score, and Shorts are picked on a timeline of the whole video with
+a 9:16 preview, their cuts moved a sentence at a time.
+
+To put it on a Linux machine (no Rust or Node needed there): CI builds the package (one static
+server binary plus the page) on every merge to `main` that changes it, and publishes it on the
+GitHub release [`app`](https://github.com/ivanwe2/localdub/releases/tag/app). With the repo cloned to
+`~/localdub` (see Get started), `bash ~/localdub/deploy/update.sh` updates the engine and installs or
+updates the web app as a systemd service. It listens on that machine only, hence the SSH tunnel. It
+won't restart the service while a run or a download is going (`--force` does). To build the package
+yourself: `bash deploy/server/build.sh` in the dev container makes `dist/localdub-app.tar.gz`; unpack
+it on the machine and run its `install.sh`.
+
+To run it from source on the machine where localdub runs, so both see the same files:
 
 ```
 cd web && npm ci && npm run build && cd ..          # the page, into web/dist
@@ -182,35 +300,11 @@ server/target/release/localdub-server               # http://127.0.0.1:8080
 | `LOCALDUB_MODELS_URL` | `http://127.0.0.1:9876` | llama-swap, for the models' and GPUs' status (`none`: no status); its key from `LLAMA_API_KEY` |
 | `LOCALDUB_YTDLP` | `yt-dlp` | yt-dlp's command, for downloads from links (`none`: no downloads) |
 
-To put it on a Linux machine (no Rust or Node needed there): CI builds the package (one static
-server binary plus the page) on every merge to `main` and publishes it on the GitHub release
-[`app`](https://github.com/ivanwe2/localdub/releases/tag/app). With the repo cloned to `~/localdub`
-(see Install), this updates the engine and installs or updates the web app as a systemd service:
-
-```
-bash ~/localdub/deploy/update.sh                     # on the machine, as root
-ssh -N -L 8080:127.0.0.1:8080 root@gpu-box           # laptop, then open http://localhost:8080
-```
-
-It listens on that machine only, hence the SSH tunnel. It won't restart the service while a run or a
-download is going (`--force` does). To build the package yourself: `bash deploy/server/build.sh` in
-the dev container makes `dist/localdub-app.tar.gz`; unpack it on the machine and run its `install.sh`.
-
 For downloads from links, `update.sh` (and the package's `install.sh`) installs
 [yt-dlp](https://github.com/yt-dlp/yt-dlp) and [Deno](https://deno.com) (the JavaScript runtime yt-dlp
 needs for YouTube) into `/usr/local/bin`, checked against their published checksums, and updates
 yt-dlp on every run: sites change and an old yt-dlp stops working. Extra yt-dlp options (cookies, a
 proxy) can go into `/etc/yt-dlp.conf`. Download only videos you have the rights to dub.
-
-In the page you upload a video, download one from a link (YouTube and the other sites yt-dlp
-knows; it lands in the videos folder as `yt-<id>-<title>.mp4`, up to 1080p, and runs beside a dub;
-links to other pages or files, and into the machine or the local network, are refused),
-or give a path inside the home folder; then start a run and follow it live: the run on air is shown
-as editing-timeline tracks (the speaker's voice, both texts, the dub as it is voiced, the music),
-with its stages, clocks, the AI's speed on LED meters, and the GPUs. The reviews are edited line by
-line (one-click fixes for names and spellings, character budgets, the glossary; or as text), voices
-are compared by ear and by score, and Shorts are picked on a timeline of the whole video with a 9:16
-preview, their cuts moved a sentence at a time. Dark or light, following the system.
 
 The API:
 
@@ -244,8 +338,9 @@ pip install -e ".[dev]"
 python -m pytest -q -m "not slow"     # unit tests, seconds
 python -m pytest -q                   # plus two whole runs against fake model servers, ~2 min
 cd server && cargo test               # the server, against fake engine and yt-dlp scripts
-cd web && npm test                    # the page's helpers
+cd web && npm test                    # the page's helpers and components
 cd web && npm run dev                 # the page with instant reload, using the server on :8080
+sh docs/screenshots/shots.sh          # the README's screenshots, from a made-up demo (dev container)
 ```
 
 The end-to-end tests run the real pipeline against stand-ins (`tests/fakes/`): a fake llama-swap
@@ -256,4 +351,4 @@ They need ffmpeg, hunspell with the Bulgarian dictionary (`hunspell-bg`) and Dej
 
 ## License
 
-MIT
+[MIT](LICENSE)
