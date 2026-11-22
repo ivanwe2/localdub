@@ -18,6 +18,7 @@ import { waitingText } from "../format";
 import { go, useNow } from "../hooks";
 import { clips, peaksPath, rulerTicks, stageName, stageStrip, timecode } from "../studio";
 import { ErrorText, message } from "./common";
+import LineFixer from "./LineFixer";
 
 type OnAirProps = {
   name: string;
@@ -34,10 +35,11 @@ export default function OnAir({ name, run, job, channels, busy, onChange, backTo
   const [wave, setWave] = useState<Waveform | null>(null);
   const [watching, setWatching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [picked, setPicked] = useState<number | null>(null);
   const running = job?.state === "running";
   const now = useNow(running);
   const done = new Set([...(run?.done ?? []), ...(job?.done ?? [])]);
-  const stamp = `${done.size}`; // the lines change when a stage finishes
+  const stamp = `${done.size}:${job?.ended_ms ?? ""}`; // the lines change when a stage (or a job) finishes
   const separated = done.has("separate");
 
   useEffect(() => {
@@ -62,13 +64,17 @@ export default function OnAir({ name, run, job, channels, busy, onChange, backTo
     };
   }, [name, separated]);
 
-  useEffect(() => setWatching(false), [name]);
+  useEffect(() => {
+    setWatching(false);
+    setPicked(null);
+  }, [name]);
 
   const channel = channels.find((c) => c.name === run?.channel);
   const shortsOnly = run?.mode === "shorts";
   const length = run?.seconds ?? wave?.seconds ?? segments.at(-1)?.end ?? 0;
   const strip = stageStrip(run, job, now);
   const p = running ? job?.progress : null;
+  const fixable = !shortsOnly && !!run?.finished && segments.some((s) => s.take);
 
   let kicker = "Stopped";
   let kickerCls = "";
@@ -218,9 +224,25 @@ export default function OnAir({ name, run, job, channels, busy, onChange, backTo
           src={channel?.source.toUpperCase() ?? "SRC"}
           tgt={channel?.target?.toUpperCase() ?? "DUB"}
           dub={!shortsOnly}
+          picked={fixable ? picked : null}
+          onPick={fixable ? setPicked : undefined}
         />
       ) : (
         <p className="empty small">The timeline fills in once the speaker’s voice is separated and the video transcribed.</p>
+      )}
+
+      {fixable && (
+        <LineFixer
+          name={name}
+          segments={segments}
+          picked={picked}
+          onPick={setPicked}
+          busy={busy}
+          src={channel?.source.toUpperCase() ?? "SRC"}
+          tgt={channel?.target?.toUpperCase() ?? "DUB"}
+          version={stamp}
+          onStarted={onChange}
+        />
       )}
 
       {job && job.log.length > 0 && (
@@ -247,9 +269,11 @@ type TimelineProps = {
   src: string;
   tgt: string;
   dub: boolean; // false for a Shorts-only run: no translation or dub tracks
+  picked?: number | null; // the line open in the line fixer
+  onPick?: (id: number) => void; // set when lines can be fixed: the dub's clips pick them
 };
 
-function Timeline({ segments, length, wave, run, job, src, tgt, dub }: TimelineProps) {
+function Timeline({ segments, length, wave, run, job, src, tgt, dub, picked, onPick }: TimelineProps) {
   const laid = useMemo(() => clips(segments, length, run, job), [segments, length, run, job]);
   const speech = useMemo(() => (wave?.speech ? peaksPath(wave.speech) : ""), [wave]);
   const music = useMemo(() => (wave?.music ? peaksPath(wave.music) : ""), [wave]);
@@ -304,11 +328,25 @@ function Timeline({ segments, length, wave, run, job, src, tgt, dub }: TimelineP
             TEXT<small>{tgt}</small>
           </div>
           <div className="lane">
-            {laid.map((c) => (
-              <div key={c.id} className={`clip ${c.text}`} style={{ left: c.left, width: c.width }} title={c.tgt ? `${c.id}. ${c.tgt}` : undefined}>
-                {c.text === "done" ? c.tgt : ""}
-              </div>
-            ))}
+            {laid.map((c) =>
+              onPick ? (
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  key={c.id}
+                  className={`clip ${c.text}${picked === c.id ? " picked" : ""}`}
+                  style={{ left: c.left, width: c.width }}
+                  title={`Line ${c.id}: ${c.tgt || "(silent)"} Click to fix it.`}
+                  onClick={() => onPick(c.id)}
+                >
+                  {c.text === "done" ? c.tgt : ""}
+                </button>
+              ) : (
+                <div key={c.id} className={`clip ${c.text}`} style={{ left: c.left, width: c.width }} title={c.tgt ? `${c.id}. ${c.tgt}` : undefined}>
+                  {c.text === "done" ? c.tgt : ""}
+                </div>
+              ),
+            )}
           </div>
         </div>
         <div className="track">

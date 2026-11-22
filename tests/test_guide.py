@@ -6,7 +6,7 @@ from pathlib import Path
 from localdub.run import main
 
 ROOT = Path(__file__).resolve().parents[1]
-COMMANDS = ["check", "languages", "run", "shorts", "voice", "channel", "models", "guide"]
+COMMANDS = ["check", "languages", "run", "shorts", "voice", "line", "channel", "models", "guide"]
 
 
 def subcommands(capsys) -> list[str]:

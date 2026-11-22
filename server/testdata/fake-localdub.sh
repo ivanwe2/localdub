@@ -55,6 +55,26 @@ if [ "$1" = "voice" ]; then
   exit 3
 fi
 
+# `line <run> <id> [--text-stdin] [--new-take]`: a line fixed after the dub. The words must come on
+# stdin ("Hello there."), never in the arguments.
+if [ "$1" = "line" ]; then
+  echo "{\"event\": \"start\", \"command\": \"line\", \"run\": \"$2\", \"channel\": \"c\", \"dir\": \"/tmp/runs/$2\", \"stages\": [\"voice\", \"mix\"], \"done\": []}"
+  case " $* " in *Hello*) echo '{"event": "result", "status": "error", "exit_code": 1, "error": "words in the arguments"}'; exit 1 ;; esac
+  case " $* " in
+    *" --text-stdin "*)
+      read -r words
+      if [ "$words" != "Hello there." ]; then
+        echo '{"event": "result", "status": "error", "exit_code": 1, "error": "no words on stdin"}'; exit 1
+      fi ;;
+  esac
+  echo '{"event": "stage", "stage": "voice", "status": "started"}'
+  echo '{"event": "stage", "stage": "voice", "status": "done", "seconds": 3.0}'
+  echo '{"event": "stage", "stage": "mix", "status": "started"}'
+  echo '{"event": "stage", "stage": "mix", "status": "done", "seconds": 9.0}'
+  echo "{\"event\": \"result\", \"status\": \"done\", \"exit_code\": 0, \"run\": \"$2\"}"
+  exit 0
+fi
+
 # `shorts <run> --lang <lang>`: proposes candidates and stops for you to pick them
 if [ "$1" = "shorts" ]; then
   echo "{\"event\": \"start\", \"command\": \"shorts\", \"run\": \"$2\", \"channel\": \"c\", \"dir\": \"/tmp/runs/$2\", \"lang\": \"$4\"}"

@@ -7,7 +7,7 @@ const [base, out, work] = process.argv.slice(2);
 const browser = await chromium.launch();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function shot(name, hash, { theme = "dark", width = 1440, height = 900, full = true, wait = 1500, act } = {}) {
+async function shot(name, hash, { theme = "dark", width = 1440, height = 900, full = true, wait = 1500, act, el } = {}) {
   const context = await browser.newContext({ viewport: { width, height }, colorScheme: theme });
   const page = await context.newPage();
   const errors = [];
@@ -15,7 +15,8 @@ async function shot(name, hash, { theme = "dark", width = 1440, height = 900, fu
   await page.goto(`${base}/${hash}`);
   if (act) await act(page);
   await sleep(wait);
-  await page.screenshot({ path: `${out}/${name}.png`, fullPage: full });
+  if (el) await page.locator(el).first().screenshot({ path: `${out}/${name}.png` }); // only this part of the page
+  else await page.screenshot({ path: `${out}/${name}.png`, fullPage: full });
   console.log(name, errors.length ? `errors: ${errors.join(" | ")}` : "ok");
   await context.close();
 }
@@ -25,6 +26,14 @@ await shot("review", "#/review/village-bakery");
 await shot("voices", "#/voices/market-day-ep12");
 await shot("shorts", "#/shorts/cheese-tour", { wait: 2500 });
 await shot("models", "#/models", { wait: 2000, full: false, height: 1000 });
+await shot("fix-line", "#/", {
+  wait: 1200,
+  el: "section[aria-labelledby=onair]",
+  act: async (page) => {
+    await page.getByRole("button", { name: "cheese-tour" }).click();
+    await page.locator(".line-row", { hasText: "A kilo is twelve leva" }).click();
+  },
+});
 
 // on air: the studio recorded while the demo engine voices its lines (one every 0.7 s)
 const size = { width: 1440, height: 680 };

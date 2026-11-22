@@ -72,6 +72,10 @@ way go under `glossary:` as `source = dub`.
 `current` voice. Differences under 0.01 are noise: let the person listen if it's close. Pick with
 `localdub voice NAME --pick N` (or `current`), then `localdub run NAME --redo voice` to re-dub.
 
+**Fixing a finished dub**: `check.txt` lists the lines worth a listen. Fix one with
+`localdub line NAME ID --text-stdin --json` (the words on stdin, so words starting with `-` are safe)
+or `--new-take`; ask the person before changing words they approved. Exit 0 = done.
+
 ## Commands
 
 | Command | |
@@ -82,6 +86,7 @@ way go under `glossary:` as `source = dub`.
 | `localdub run NAME [--redo STAGE]` | continue (or redo from a stage: prep, separate, transcribe, spelling, review1, translate, review2, voice, mix) |
 | `localdub shorts NAME [--lang dub\|original] [--auto N] [--redo select\|vision]` | Shorts from a finished run (a Shorts-only run: original only) |
 | `localdub voice NAME [--pick N\|current\|MM:SS-MM:SS\|file.wav]` | compare voice samples, pick one |
+| `localdub line NAME ID [--text-stdin \| --text WORDS] [--new-take]` | one line of a finished dub: without options a `line` event (src, tgt, passed, heard, fit); with new words (empty: silent) or `--new-take` it is voiced again and the dub (and its dubbed Shorts) made again |
 | `localdub channel NAME [--speaker man\|woman\|none]` | a channel's languages, speaker, voice |
 | `localdub models [--set TASK=SERVER/MODEL] [--effort USE=LEVEL] [--test TASK]` | which model does each task (text, vision, voice, hearing, separation), on which server; try one |
 | `localdub models --server NAME --url URL --kind llama-swap\|openai [--key-stdin] \| --remove` | add, change or remove a server |

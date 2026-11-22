@@ -35,9 +35,19 @@ SEGS = [
 LENGTH = 170
 
 
-def segments(with_tgt=True):
-    return [{"id": i + 1, "start": a, "end": b, "src": s, **({"tgt": t} if with_tgt else {}),
-             "slot": b - a, "budget": round((b - a) * 15)} for i, (a, b, s, t) in enumerate(SEGS)]
+def segments(with_tgt=True, voiced=False):
+    out = [{"id": i + 1, "start": a, "end": b, "src": s, **({"tgt": t} if with_tgt else {}),
+            "slot": b - a, "budget": round((b - a) * 15)} for i, (a, b, s, t) in enumerate(SEGS)]
+    if voiced:  # every line voiced; two of them worth a listen, as the line fixer lists them
+        for seg in out:
+            spoken = round(min(seg["slot"] - 0.4, len(seg["tgt"]) / 14), 2)
+            seg.update(placed=seg["start"] + 0.1, overlap=0.0,
+                       take={"seed": 42, "ok": True, "wer": 0.0, "why": "", "heard": seg["tgt"], "tries": 1,
+                             "fit": "fits", "spoken": spoken, "sim": 0.95, "seconds": spoken, "file": ""})
+        out[6]["take"].update(ok=False, why="last word 'leva' missing", heard="A kilo is twelve", tries=3, seed=1234)
+        out[9]["take"].update(fit="sped up 15%, OVER by 0.6s", seconds=8.6)
+        out[9]["overlap"] = 0.7
+    return out
 
 
 def speech_envelope(rate):
@@ -173,13 +183,13 @@ shorts = "\n".join([
     "    screen: vegetables", "    starts: The tomatoes are late this year.", "    ends:   If you liked it, subscribe.", "",
 ])
 d = run("cheese-tour", finished, {**before_voice, "voice": 105, "mix": 4},
-        {"segments.json": segments(), "shorts/dub/candidates.txt": shorts},
+        {"segments.json": segments(voiced=True), "shorts/dub/candidates.txt": shorts},
         outputs={"video": f"{home}/runs/cheese-tour/cheese-tour.en.mp4", "subtitles": []}, created="2026-11-19T18:00:00")
 stems(d)
 video(d / "cheese-tour.en.mp4")
 
 # done
-d = run("rooftop-garden", finished, {**before_voice, "voice": 212, "mix": 6}, {"segments.json": segments()},
+d = run("rooftop-garden", finished, {**before_voice, "voice": 212, "mix": 6}, {"segments.json": segments(voiced=True)},
         seconds=612.0, outputs={"video": f"{home}/runs/rooftop-garden/rooftop-garden.en.mp4", "subtitles": []},
         created="2026-11-18T12:00:00")
 (d / "rooftop-garden.en.mp4").write_bytes(b"")

@@ -8,6 +8,7 @@ import {
   clips,
   clock,
   latestSpeed,
+  lineNotes,
   ledClasses,
   ledsLit,
   marks,
@@ -128,6 +129,29 @@ describe("stage strips", () => {
     const rendered = stageStrip(run({ mode: "shorts", done: checked, timings: { "shorts-original": 95 } }), null);
     expect(rendered.at(-1)).toMatchObject({ cls: "done", note: "1:35" });
     expect(runState(run({ mode: "shorts", waiting_for: { kind: "review1", lang: null, file: "r" } }), null).text).toBe("Your turn · the transcript");
+  });
+});
+
+describe("fixing a line", () => {
+  it("the job's own stages: a finished run's voice and mix are done again, the line being fixed is on", () => {
+    const finished = run({ finished: true, done: ["prep", "review1", "translate", "review2", "voice", "mix"] });
+    const fixing = job({ stages: ["voice", "mix"], current: "voice", progress: { stage: "voice", label: "re-voicing, take 1", done: 1, total: 1, line: 2, at: 12 } });
+    expect(stageStrip(finished, fixing).map((s) => [s.stage, s.cls])).toEqual([
+      ["voice", "now"],
+      ["mix", "todo"],
+    ]);
+    expect(clips(segs, 40, finished, fixing).map((c) => c.dub)).toEqual(["done", "now", "done"]);
+  });
+
+  it("what makes a line worth a listen, as check.txt says it", () => {
+    const take = { ok: true, why: "", heard: "One.", fit: "fits", seconds: 1, tries: 1 };
+    expect(lineNotes({ ...segs[0], take })).toEqual([]);
+    expect(lineNotes({ ...segs[0], take: null })).toEqual(["no audio"]);
+    expect(lineNotes({ ...segs[0], tgt: "", take: null })).toEqual([]); // left silent on purpose
+    const failed = { ...take, ok: false, why: "last word 'one' missing", heard: "Wo", tries: 3 };
+    expect(lineNotes({ ...segs[0], take: failed })).toEqual(["failed the check after 3 takes (last word 'one' missing); heard “Wo”"]);
+    const long = { ...segs[0], take: { ...take, fit: "sped up 15%, OVER by 0.4s" }, overlap: 0.4, shortened_from: "The one." };
+    expect(lineNotes(long)).toEqual(["runs 0.4s into the next line (sped up 15%, OVER by 0.4s)", "shortened to fit, was: “The one.”"]);
   });
 });
 

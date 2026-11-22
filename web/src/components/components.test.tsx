@@ -5,7 +5,8 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Channel, RunSummary } from "../api";
+import type { Channel, RunSummary, Segment } from "../api";
+import LineFixer from "./LineFixer";
 import ModelsScreen from "./ModelsScreen";
 import NewRun from "./NewRun";
 import ReviewScreen from "./ReviewScreen";
@@ -291,5 +292,37 @@ describe("Models", () => {
     const servers = screen.getByRole("region", { name: "Servers" });
     expect(within(servers).getByText(/off your network/)).toBeTruthy();
     expect(within(servers).getByText("not reachable")).toBeTruthy();
+  });
+});
+
+describe("Fixing a line", () => {
+  const take = { ok: true, why: "", heard: "One.", fit: "fits", seconds: 1.2, tries: 1 };
+  const lines: Segment[] = [
+    { id: 1, start: 0, end: 2, src: "Едно.", tgt: "One.", take, placed: 0.1, overlap: 0 },
+    { id: 2, start: 3, end: 5, src: "Две.", tgt: "Two.", take: { ...take, ok: false, why: "last word 'two' missing", heard: "To", tries: 3 }, placed: 3 },
+  ];
+
+  it("lists the lines worth a listen, plays both sides and sends new words", async () => {
+    const sent = serve({ "POST /api/runs/market/lines/2": { run: "market", state: "running" } });
+    const started = vi.fn();
+    const { rerender } = render(
+      <LineFixer name="market" segments={lines} picked={null} onPick={() => {}} busy={false} src="BG" tgt="EN" version="1" onStarted={started} />,
+    );
+    expect(screen.getByRole("button", { name: /Worth a listen · 1/ })).toBeTruthy();
+    expect(screen.queryByText("One.")).toBeNull(); // it passed: only under "All"
+    rerender(<LineFixer name="market" segments={lines} picked={2} onPick={() => {}} busy={false} src="BG" tgt="EN" version="1" onStarted={started} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Original" }));
+    const audio = (HTMLMediaElement.prototype.pause as ReturnType<typeof vi.fn>).mock.contexts.at(-1) as HTMLAudioElement;
+    expect(audio.getAttribute("src")).toBe("/files/market/audio44.wav?v=1");
+    expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Another take" })).toHaveProperty("disabled", false);
+
+    fireEvent.change(screen.getByLabelText("EN · dub"), { target: { value: "  Two,\n please. " } });
+    expect(screen.getByRole("button", { name: "Another take" })).toHaveProperty("disabled", true);
+    fireEvent.click(screen.getByRole("button", { name: "Voice the new words" }));
+    await waitFor(() => expect(started).toHaveBeenCalled());
+    const post = sent.find((s) => s.method === "POST")!;
+    expect([post.url, JSON.parse(post.body!)]).toEqual(["/api/runs/market/lines/2", { text: "Two, please." }]);
   });
 });

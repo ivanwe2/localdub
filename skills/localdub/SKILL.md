@@ -1,6 +1,6 @@
 ---
 name: localdub
-description: Dub a video into another language in the creator's own cloned voice, and cut vertical Shorts from it, with the localdub command-line tool (runs on local GPUs). Use when asked to dub or translate a video's speech, make Shorts or Reels from a video, approve or edit localdub's transcript, translation or Shorts reviews, pick or change a channel's voice, or choose which models localdub uses.
+description: Dub a video into another language in the creator's own cloned voice, and cut vertical Shorts from it, with the localdub command-line tool (runs on local GPUs). Use when asked to dub or translate a video's speech, make Shorts or Reels from a video, approve or edit localdub's transcript, translation or Shorts reviews, fix a line of a finished dub, pick or change a channel's voice, or choose which models localdub uses.
 ---
 
 # localdub
@@ -22,6 +22,8 @@ The essentials:
   without a dub use `--shorts-only` and only `--from`.
 - Exit codes: `0` done, `3` waiting for a review or a pick (`result.waiting_for.file` says which
   file; edit it, set `status: approved`, continue), `1` error (`result.error`; fix, then continue).
+- A finished dub's line is fixed alone: `localdub line NAME ID --text-stdin --json` (new words on
+  stdin) or `--new-take`; `check.txt` in the run lists the lines worth a listen.
 - One run at a time. Never put an API key on a command line (`localdub models --server NAME
   --key-stdin` reads it from stdin).
 - Only clone voices of people who agreed, and only process videos the person has the rights to.
