@@ -53,8 +53,10 @@ export function stageStrip(
   job: Job | null,
   now = Date.now(),
 ): StageItem[] {
-  const stages = job && job.stages.length ? job.stages : runStages(run);
-  const done = new Set([...(run?.done ?? []), ...(job?.done ?? [])]);
+  const own = job != null && job.stages.length > 0;
+  const stages = own ? job.stages : runStages(run);
+  // a job with its own stages counts only what it did (fixing a line redoes a finished run's voice and mix)
+  const done = new Set(own ? job.done : (run?.done ?? []));
   const timings = { ...(run?.timings ?? {}), ...(job?.timings ?? {}) };
   const current = job?.current ?? null;
   const waitingKind = job?.state === "waiting" ? job.waiting_for?.kind : run?.waiting_for?.kind;
@@ -188,6 +190,7 @@ export function clips(segments: Segment[], length: number, run: Pick<RunSummary,
     if (p?.stage === "voice" && p.line != null && p.label?.startsWith("voicing")) {
       dub = s.id < p.line ? "done" : s.id === p.line ? "now" : "ghost";
     }
+    if (p?.stage === "voice" && p.label?.startsWith("re-voicing") && s.id === p.line) dub = "now"; // a line being fixed
     return {
       id: s.id,
       left: at(s.start, length),
@@ -198,6 +201,18 @@ export function clips(segments: Segment[], length: number, run: Pick<RunSummary,
       dub,
     };
   });
+}
+
+/** What makes a voiced line worth a listen, as check.txt says it; [] if nothing does. */
+export function lineNotes(s: Segment): string[] {
+  const notes: string[] = [];
+  const t = s.take;
+  if (s.tgt?.trim() && !t) notes.push("no audio");
+  if (t && !t.ok) notes.push(`failed the check after ${t.tries} take${t.tries === 1 ? "" : "s"}${t.why ? ` (${t.why})` : ""}; heard “${t.heard}”`);
+  if (t && (s.overlap ?? 0) > 0.1) notes.push(`runs ${(s.overlap ?? 0).toFixed(1)}s into the next line (${t.fit})`);
+  for (const flag of s.flags ?? []) notes.push(flag);
+  if (s.shortened_from) notes.push(`shortened to fit, was: “${s.shortened_from}”`);
+  return notes;
 }
 
 /**

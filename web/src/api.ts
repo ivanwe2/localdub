@@ -125,6 +125,16 @@ export async function getWaveform(run: string): Promise<Waveform> {
   return (await check(await fetch(`${runPath(run)}/waveform`))).json();
 }
 
+/** The take a line was voiced with (segments.json "take", once the voice stage is done). */
+export interface Take {
+  ok: boolean; // it passed the check: the take says the line
+  why: string; // why not
+  heard: string; // what the check heard
+  fit: string; // "fits", "sped up 8%", "sped up 15%, OVER by 0.4s"
+  seconds: number; // how long it plays in the dub
+  tries: number;
+}
+
 /** One line of a run: where it is in the video, the original text and (once translated) the dub's. */
 export interface Segment {
   id: number;
@@ -132,6 +142,13 @@ export interface Segment {
   end: number;
   src: string;
   tgt: string | null;
+  /** Once voiced: the take, where the dub plays it, how far it runs into the next line. */
+  take?: Take | null;
+  placed?: number | null;
+  overlap?: number;
+  flags?: string[]; // the transcript's doubts
+  shortened_from?: string | null; // shortened to fit, from these words
+  fixed?: boolean; // fixed after the dub
 }
 
 /**
@@ -149,6 +166,12 @@ export async function getSegments(run: string): Promise<Segment[]> {
       end: Number(s.end),
       src: String(s.src ?? s.bg ?? ""),
       tgt: typeof (s.tgt ?? s.en) === "string" ? String(s.tgt ?? s.en) : null,
+      take: (s.take as Take | undefined) ?? null,
+      placed: typeof s.placed === "number" ? s.placed : null,
+      overlap: typeof s.overlap === "number" ? s.overlap : 0,
+      flags: Array.isArray(s.flags) ? s.flags.map(String) : [],
+      shortened_from: typeof s.shortened_from === "string" ? s.shortened_from : null,
+      fixed: s.fixed === true,
     }));
   }
   return [];
@@ -287,6 +310,14 @@ const runPath = (run: string) => `/api/runs/${encodeURIComponent(run)}`;
 /** Goes on where the run stopped: after a review or an error, or renders the picked Shorts. */
 export function continueRun(run: string): Promise<Job> {
   return post(`${runPath(run)}/continue`);
+}
+
+/**
+ * Fixes one line of a finished dub: new words (empty: the line stays silent) and/or another take of
+ * them. The line is voiced again, the dub mixed again, and the dubbed Shorts with it rendered again.
+ */
+export function fixLine(run: string, id: number, change: { text?: string; new_take?: boolean }): Promise<Job> {
+  return post(`${runPath(run)}/lines/${id}`, change);
 }
 
 /** Proposes Shorts for a finished run; the run then waits for you to pick them. */

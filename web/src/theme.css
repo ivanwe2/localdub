@@ -1927,3 +1927,125 @@ dl.details dd {
   padding: 14px 0;
   border-top: 1px solid var(--line);
 }
+
+/* --- fixing a line of a finished dub (LineFixer) --- */
+
+button.clip {
+  border: 0;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.clip:hover,
+.clip.picked {
+  outline: 2px solid var(--air);
+  outline-offset: -1px;
+}
+
+.lines {
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.chip.ok {
+  color: var(--ok);
+  border-color: var(--ok);
+  min-height: 22px;
+  font-size: 12px;
+}
+
+.line-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  max-height: 460px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.line-list > li + li {
+  border-top: 1px solid var(--line);
+}
+
+.line-list > li.open {
+  background: var(--panel2);
+}
+
+.line-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: 400 14px/1.35 var(--sans);
+  text-align: left;
+  cursor: pointer;
+}
+
+.line-row:hover {
+  background: var(--track);
+}
+
+.line-row .tc {
+  margin-top: 0;
+  flex: 0 0 auto;
+  min-width: 3ch;
+  font-size: 14px;
+}
+
+.line-sides .kicker {
+  display: block;
+}
+
+.line-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.line-note {
+  flex: 0 1 40%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--amber);
+  font-size: 13px;
+}
+
+.line-editor {
+  padding: 4px 12px 14px;
+}
+
+.line-sides {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 18px;
+}
+
+.line-sides textarea {
+  width: 100%;
+}
+
+.line-notes {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  color: var(--amber);
+  font-size: 14px;
+}
+
+@media (max-width: 640px) {
+  .line-note {
+    display: none;
+  }
+}
