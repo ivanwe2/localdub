@@ -231,6 +231,16 @@ h3 {
   border-color: var(--text);
 }
 
+.icon-btn[aria-pressed="true"] {
+  color: var(--air);
+  border-color: var(--air);
+}
+
+.icon-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .lamp {
   display: inline-flex;
   align-items: center;

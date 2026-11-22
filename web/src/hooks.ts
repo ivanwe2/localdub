@@ -1,7 +1,7 @@
 // The page's live data and small pieces of state, as React hooks (C#: services the components
 // subscribe to).
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   type Channel,
@@ -15,6 +15,7 @@ import {
   type RunSummary,
   type Status,
 } from "./api";
+import { jobNotice } from "./format";
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -117,6 +118,61 @@ export function useRoute(): Route {
 
 export function go(route: Route): void {
   window.location.hash = routeHref(route);
+}
+
+/** Browser notifications: whether they're on, and whether this browser allows them at all. */
+export type Notices = { on: boolean; allowed: boolean; denied: boolean; toggle: () => void };
+
+/**
+ * A browser notification when the job stops running (done, waiting for you, failed) while this tab
+ * is in the background, once they're turned on here (remembered). Browsers allow them only on a
+ * secure page: http://localhost (the SSH tunnel) is one, a LAN address over http isn't.
+ */
+export function useNotices(job: Job | null): Notices {
+  const allowed = typeof window !== "undefined" && "Notification" in window && window.isSecureContext !== false;
+  const [on, setOn] = useState(() => {
+    try {
+      return allowed && Notification.permission === "granted" && localStorage.getItem("localdub.notify") === "on";
+    } catch {
+      return false;
+    }
+  });
+  const [denied, setDenied] = useState(() => allowed && Notification.permission === "denied");
+  const last = useRef<string | null>(null); // the job (run + start) and its state, as last seen
+
+  useEffect(() => {
+    if (!job) return;
+    const key = `${job.run}@${job.started_ms}`;
+    const before = last.current;
+    last.current = `${key}:${job.state}`;
+    if (!on || before !== `${key}:running` || job.state === "running" || !document.hidden) return;
+    const notice = jobNotice(job);
+    if (!notice) return;
+    const shown = new Notification(notice.title, { body: notice.body, tag: "localdub" });
+    shown.onclick = () => {
+      window.focus();
+      window.location.hash = notice.hash;
+      shown.close();
+    };
+  }, [job, on]);
+
+  const remember = (value: boolean) => {
+    try {
+      localStorage.setItem("localdub.notify", value ? "on" : "off");
+    } catch {
+      // no storage: it lasts until the page is reloaded
+    }
+    setOn(value);
+  };
+  const toggle = () => {
+    if (!allowed) return;
+    if (on) return remember(false);
+    void Notification.requestPermission().then((permission) => {
+      setDenied(permission === "denied");
+      remember(permission === "granted");
+    });
+  };
+  return { on, allowed, denied, toggle };
 }
 
 export type Theme = "dark" | "light";

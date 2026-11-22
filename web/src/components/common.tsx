@@ -65,6 +65,16 @@ export function MoonIcon({ size = 16 }: IconProps) {
   );
 }
 
+export function BellIcon({ size = 16, off = false }: IconProps & { off?: boolean }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true">
+      <path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z" />
+      <path d="M10 20.5a2 2 0 0 0 4 0" />
+      {off && <path d="M4 4l16 16" />}
+    </svg>
+  );
+}
+
 export function ErrorText({ error }: { error: string | null }) {
   return error ? (
     <p className="error" role="alert">

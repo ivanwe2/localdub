@@ -184,7 +184,7 @@ an Agent Skill that points them to it (Claude Code: `cp -r skills/localdub ~/.cl
 ## Commands
 
 ```
-localdub check                                   is everything in place?
+localdub check [--notify]                        is everything in place? (--notify: send a test notification)
 localdub languages                               the languages it knows, and which it can dub into
 localdub run VIDEO --channel NAME                dub a whole video
           [--from LANG --to LANG]                a new channel's languages (required the first time)
@@ -334,6 +334,17 @@ music), with its stages, clocks, the AI's speed on LED meters, and the GPUs. The
 line by line (one-click fixes for names and spellings, character budgets, the glossary; or as text),
 voices are compared by ear and by score, and Shorts are picked on a timeline of the whole video with
 a 9:16 preview, their cuts moved a sentence at a time.
+
+**Get told when it needs you.** A run takes about as long as its video, so you needn't watch it:
+the bell in the top bar turns on browser notifications (the page tells you when a run waits for a
+review or ends, while its tab is in the background; browsers allow it on http://localhost, so
+through the tunnel). For your phone, even with the page closed, the engine can push a message through
+[ntfy](https://ntfy.sh): set `"notify": {"ntfy": "https://ntfy.sh/<a topic only you know>"}` in
+`~/dub/settings.json` (optionally `"page_url": "http://localhost:8080"` to open the run from the
+message; `$NTFY_TOKEN` for a protected topic), subscribe to the topic in the ntfy app, and try it with
+`localdub check --notify`. It's sent after `run`, `shorts`, `voice` and `line` when they ran at least
+a minute (`notify.min_seconds`). An ntfy.sh topic is readable by anyone who knows its name, and a
+message holds the run's name (and an error's first line): pick an unguessable topic or run your own.
 
 To put it on a Linux machine (no Rust or Node needed there): CI builds the package (one static
 server binary plus the page) on every merge to `main` that changes it, and publishes it on the

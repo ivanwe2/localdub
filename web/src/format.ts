@@ -188,6 +188,22 @@ export function waitingText(job: Pick<Job, "waiting_for">): string {
   return WAITING[kind] ?? `Waiting for ${kind || "a person"}`;
 }
 
+/**
+ * The browser notification for a job that just stopped running: done, waiting for you, or failed;
+ * `hash` is the screen it opens. null while it still runs.
+ */
+export function jobNotice(job: Pick<Job, "run" | "state" | "waiting_for" | "error">): { title: string; body: string; hash: string } | null {
+  const run = encodeURIComponent(job.run);
+  if (job.state === "waiting") {
+    const kind = job.waiting_for?.kind ?? "";
+    const page = kind === "voice" ? "voices" : kind === "shorts" ? "shorts" : "review";
+    return { title: `${job.run}: your turn`, body: waitingText(job), hash: `#/${page}/${run}` };
+  }
+  if (job.state === "done") return { title: `${job.run}: done`, body: "Everything it was asked to make is ready.", hash: "#/" };
+  if (job.state === "failed") return { title: `${job.run}: stopped`, body: job.error ?? "It stopped; see the studio.", hash: "#/" };
+  return null;
+}
+
 /** The review text with its status line set to approved, which tells the engine to go on. */
 export function approve(text: string): string {
   const lines = text.split("\n");

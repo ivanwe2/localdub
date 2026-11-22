@@ -1,8 +1,8 @@
 // The top bar: the name, the on-air lamp, the screens, and the AI box at a glance.
 
 import type { Job, RunSummary, Status } from "../api";
-import { type Route, routeHref, type Theme } from "../hooks";
-import { MoonIcon, SunIcon } from "./common";
+import { type Notices, type Route, routeHref, type Theme } from "../hooks";
+import { BellIcon, MoonIcon, SunIcon } from "./common";
 
 /** ON AIR while a run works, YOUR TURN while one waits for you, else OFF AIR. */
 export function Lamp({ job, waiting }: { job: Job | null; waiting: boolean }) {
@@ -37,9 +37,17 @@ type HeaderProps = {
   runs: RunSummary[];
   theme: Theme;
   onTheme: () => void;
+  notices?: Notices;
 };
 
-export default function Header({ job, status, route, runs, theme, onTheme }: HeaderProps) {
+/** The bell's words: what a click does, or why it can't. */
+export function noticeTitle(n: Notices): string {
+  if (!n.allowed) return "This browser can't notify from this address (open it through the tunnel, at http://localhost)";
+  if (n.denied) return "Notifications are blocked for this page in the browser's settings";
+  return n.on ? "Notifications on: you're told when a run needs you or ends. Click to turn them off" : "Tell me when a run needs me or ends";
+}
+
+export default function Header({ job, status, route, runs, theme, onTheme, notices }: HeaderProps) {
   const t = targets(runs, job);
   const waiting = runs.some((r) => r.waiting_for);
   const items: { label: string; route: Route; count?: number }[] = [
@@ -80,6 +88,19 @@ export default function Header({ job, status, route, runs, theme, onTheme }: Hea
               ? `llama-swap · ${models} model${models === 1 ? "" : "s"} · ${gpus} GPU${gpus === 1 ? "" : "s"}`
               : "llama-swap · …"}
         </span>
+        {notices && (
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={notices.toggle}
+            disabled={!notices.allowed || (notices.denied && !notices.on)}
+            aria-pressed={notices.on}
+            aria-label={noticeTitle(notices)}
+            title={noticeTitle(notices)}
+          >
+            <BellIcon off={!notices.on} />
+          </button>
+        )}
         <button
           type="button"
           className="icon-btn"
