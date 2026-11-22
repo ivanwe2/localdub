@@ -13,7 +13,7 @@ import RunList from "./components/RunList";
 import ShortsScreen from "./components/ShortsScreen";
 import VoiceScreen from "./components/VoiceScreen";
 import WaveField, { type WaveMode } from "./components/WaveField";
-import { useChannels, useJob, useRoute, useRuns, useStatus, useTheme } from "./hooks";
+import { useChannels, useJob, useNotices, useRoute, useRuns, useStatus, useTheme } from "./hooks";
 
 export default function App() {
   const job = useJob();
@@ -22,6 +22,7 @@ export default function App() {
   const status = useStatus();
   const route = useRoute();
   const [theme, toggleTheme] = useTheme();
+  const notices = useNotices(job);
   const [focus, setFocus] = useState<string | null>(null);
   const busy = job?.state === "running";
 
@@ -42,7 +43,7 @@ export default function App() {
     <>
       <WaveField mode={mode} />
       <div className="shell">
-        <Header job={job} status={status} route={route} runs={runs} theme={theme} onTheme={toggleTheme} />
+        <Header job={job} status={status} route={route} runs={runs} theme={theme} onTheme={toggleTheme} notices={notices} />
         <main>
           {route.page === "studio" && (
             <>

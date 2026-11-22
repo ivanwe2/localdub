@@ -18,6 +18,7 @@ import {
   candidates,
   formatBytes,
   formatSeconds,
+  jobNotice,
   sparkline,
   progress,
   suggestName,
@@ -95,6 +96,20 @@ describe("suggestName", () => {
 
   it("keeps at most 64 characters", () => {
     expect(suggestName(`/v/${"a".repeat(100)}.mp4`)).toHaveLength(64);
+  });
+});
+
+describe("jobNotice", () => {
+  it("tells what a job that stopped running needs, and which screen to open", () => {
+    expect(jobNotice(job({}))).toBeNull();
+    expect(jobNotice(job({ state: "waiting", waiting_for: { kind: "review2", file: "/r2.txt" } }))).toEqual({
+      title: "market: your turn",
+      body: "Review 2 of 2 (the translation)",
+      hash: "#/review/market",
+    });
+    expect(jobNotice(job({ state: "waiting", waiting_for: { kind: "voice", file: "/v.json" } }))?.hash).toBe("#/voices/market");
+    expect(jobNotice(job({ state: "failed", error: "no voice sample" }))).toMatchObject({ title: "market: stopped", body: "no voice sample" });
+    expect(jobNotice(job({ state: "done" }))?.title).toBe("market: done");
   });
 });
 

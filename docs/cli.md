@@ -167,7 +167,7 @@ All of them take `--json`.
 
 | Command | What it does |
 |---|---|
-| `localdub check` | is everything in place? (exit 1 if a line fails) |
+| `localdub check [--notify]` | is everything in place? (exit 1 if a line fails); `--notify` also sends a test notification |
 | `localdub languages [--apt LANG… \| all]` | the languages localdub knows, which can be dubbed into, which dictionaries are installed; `--apt` prints the Debian packages for install scripts |
 | `localdub run VIDEO --channel NAME [--from L --to L] [--speaker man\|woman] [--start T --duration T] [--name NAME] [--no-review] [--shorts N] [--shorts-only]` | start a run |
 | `localdub run NAME [--redo STAGE]` | continue a run (or redo from a stage on) |
@@ -272,6 +272,7 @@ writes its part for you. The ones you're most likely to touch:
 | `tts_languages` | en, de, fr, it, pt, es, ru | what channels can be dubbed into |
 | `nemo.backend`, `demucs.backend` | `http` | `local`: run Nemotron or Demucs on this machine instead |
 | `shorts.count`, `shorts.min_seconds`, `shorts.max_seconds` | 6, 25, 60 | how many Shorts are proposed, and how long |
+| `notify.ntfy` | (off) | an ntfy topic's address (`https://ntfy.sh/<a topic only you know>`): a push message when `run`, `shorts`, `voice` or `line` waits for you or ends after at least `notify.min_seconds` (60); `notify.page_url` (e.g. `http://localhost:8080`) opens the run from it; `$NTFY_TOKEN` for a protected topic. Test: `localdub check --notify` |
 
 ## When something goes wrong
 

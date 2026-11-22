@@ -5,7 +5,9 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Channel, RunSummary, Segment } from "../api";
+import type { Channel, Job, RunSummary, Segment } from "../api";
+import { useNotices } from "../hooks";
+import Header from "./Header";
 import LineFixer from "./LineFixer";
 import ModelsScreen from "./ModelsScreen";
 import NewRun from "./NewRun";
@@ -324,5 +326,38 @@ describe("Fixing a line", () => {
     await waitFor(() => expect(started).toHaveBeenCalled());
     const post = sent.find((s) => s.method === "POST")!;
     expect([post.url, JSON.parse(post.body!)]).toEqual(["/api/runs/market/lines/2", { text: "Two, please." }]);
+  });
+});
+
+describe("Notifications", () => {
+  it("the bell asks the browser once, then tells when the run on air waits for you", async () => {
+    const shown: { title: string; body?: string }[] = [];
+    class FakeNotification {
+      static permission: NotificationPermission = "default";
+      static requestPermission = vi.fn(async () => (FakeNotification.permission = "granted"));
+      onclick: (() => void) | null = null;
+      constructor(title: string, options?: NotificationOptions) {
+        shown.push({ title, body: options?.body });
+      }
+      close() {}
+    }
+    vi.stubGlobal("Notification", FakeNotification);
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
+    const base: Job = {
+      run: "market", state: "running", stages: ["prep"], done: [], current: "prep", waiting_for: null, error: null, calls: [],
+      log: [], started_ms: 1, ended_ms: null, stage_started_ms: null, timings: {}, progress: null,
+    };
+    function Bell({ job }: { job: Job }) {
+      const notices = useNotices(job);
+      return <Header job={job} status={null} route={{ page: "studio" }} runs={[]} theme="dark" onTheme={() => {}} notices={notices} />;
+    }
+    const { rerender } = render(<Bell job={base} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Tell me when a run needs me/ }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Notifications on/ })).toBeTruthy());
+    rerender(<Bell job={{ ...base, state: "waiting", waiting_for: { kind: "review1", file: "r" } }} />);
+
+    expect(shown).toEqual([{ title: "market: your turn", body: "Review 1 of 2 (the transcript)" }]);
+    expect(FakeNotification.requestPermission).toHaveBeenCalledTimes(1);
   });
 });

@@ -40,6 +40,7 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 | `src/localdub/speaker.py` | speaker fingerprints (WavLM x-vectors), voiceprint, similarity |
 | `src/localdub/mix.py` | placement (late starts), mixing, muxing, subtitles |
 | `src/localdub/shorts.py` | motion, vision, candidates, captions, rendering |
+| `src/localdub/notify.py` | push messages through ntfy (settings `notify`) when `run`/`shorts`/`voice`/`line` waits or ends after ≥ `min_seconds`; `check --notify` sends a test |
 | `src/localdub/review.py`, `media.py`, `asr.py`, `settings.py` | review files, ffmpeg, Nemotron (http or local backend), defaults + channel profiles |
 | `tests/` | unit tests; `test_e2e.py` runs whole videos against `tests/fakes/` (fake llama-swap + the real Demucs wrapper; one run http, one local) |
 | `deploy/install.sh` | install/update on CT 103 from git into the Demucs venv, plus every language's hunspell dictionary, one package at a time (`LANGS="de fr"`: only those + the channels') |

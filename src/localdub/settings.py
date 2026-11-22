@@ -65,6 +65,9 @@ DEFAULT_SETTINGS = {
     },
     "takes_per_line": 2,  # good takes to compare per line when speaker similarity is on (1 = first good take)
     "vision_model": "gemma4-31b-vision",
+    # a push message when a long job waits for you or ends (notify.py): an ntfy topic's address, e.g.
+    # "https://ntfy.sh/<a topic only you know>"; "page_url" (e.g. http://localhost:8080) makes it open the run
+    "notify": {"ntfy": "", "min_seconds": 60, "page_url": ""},
     "shorts": {
         "count": 6,
         "min_seconds": 25,

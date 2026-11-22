@@ -27,7 +27,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import events, languages, media, review
+from . import events, languages, media, notify, review
 from .segments import upgrade, upgrade_all
 from .llm import LLMError, Models
 from .mix import mix, mux, place, subtitles
@@ -1027,6 +1027,13 @@ def cmd_check(args) -> int:
         except Exception as e:  # noqa: BLE001
             line(False, "speaker fingerprints", str(e)[:200])
     check_models(settings, used, line)
+    ntfy = settings.get("notify", {}).get("ntfy")
+    if args.notify:  # send a test message
+        problem = notify.send(settings.get("notify", {}), {"title": "localdub: a test", "tags": ["wave"], "page": "studio",
+                                                          "message": "Notifications work: long jobs will tell you here."})
+        line(problem is None, f"notifications to {ntfy or '(not set)'}", problem or "")
+    else:
+        log(f"  info  notifications: {('ntfy, ' + ntfy) if ntfy else 'off (settings: notify.ntfy)'}")
     log("all good" if ok else "fix the FAIL lines above")
     if not ok:
         events.note(error="some checks failed")
@@ -1441,7 +1448,8 @@ def main(argv=None) -> int:
     words.add_argument("--text", help="the line's new words in the dub language (\"\" leaves the line silent)")
     words.add_argument("--text-stdin", action="store_true", help="read the new words from stdin (one line)")
     li.add_argument("--new-take", action="store_true", help="voice the line again with new seeds")
-    sub.add_parser("check", parents=[common], help="check that the tools, models and server are in place")
+    ck = sub.add_parser("check", parents=[common], help="check that the tools, models and server are in place")
+    ck.add_argument("--notify", action="store_true", help="also send a test notification (settings: notify.ntfy)")
     sub.add_parser("guide", parents=[common], help="the guide for AI agents driving localdub: the loop, files, events")
     from .models import EFFORT_LEVELS, EFFORTS, KINDS, TASKS
     mo = sub.add_parser("models", parents=[common],
@@ -1466,6 +1474,7 @@ def main(argv=None) -> int:
                          "every language) and for every channel's video language (for install scripts)")
     args = ap.parse_args(argv)
     events.configure(args.json)
+    t0 = time.monotonic()
     try:
         commands = {"run": cmd_run, "shorts": cmd_shorts, "voice": cmd_voice, "check": cmd_check,
                     "models": cmd_models, "guide": cmd_guide, "channel": cmd_channel, "languages": cmd_languages,
@@ -1474,6 +1483,10 @@ def main(argv=None) -> int:
     except Exception as e:  # a bug, not a handled error: still end the event stream with a result
         events.note(error=f"{type(e).__name__}: {e}")
         events.finish(1)
+        if args.cmd in notify.COMMANDS:
+            notify.after(load_settings(), args.cmd, 1, events.noted(), time.monotonic() - t0)
         raise
     events.finish(rc)
+    if args.cmd in notify.COMMANDS:
+        notify.after(load_settings(), args.cmd, rc, events.noted(), time.monotonic() - t0)
     return rc

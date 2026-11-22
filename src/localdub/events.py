@@ -74,6 +74,11 @@ def note(**fields) -> None:
     _result.update(fields)
 
 
+def noted() -> dict:
+    """What was noted for the result so far (a copy)."""
+    return dict(_result)
+
+
 def finish(exit_code: int) -> None:
     """The last event: how the command ended, plus everything noted on the way."""
     status = {0: "done", 3: "waiting"}.get(exit_code, "error")
