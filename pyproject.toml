@@ -25,6 +25,9 @@ version = { attr = "localdub.__version__" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+localdub = ["guide.md"]  # printed by `localdub guide`
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]  # tests import the package from src/ without installing it

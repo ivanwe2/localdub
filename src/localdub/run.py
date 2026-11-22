@@ -947,6 +947,17 @@ def cmd_models(args) -> int:
     return 0
 
 
+def cmd_guide(args) -> int:
+    """`localdub guide`: the guide for AI agents driving localdub (guide.md, shipped with the package)."""
+    from importlib.resources import files
+    text = files("localdub").joinpath("guide.md").read_text(encoding="utf-8")
+    if args.json:
+        events.emit("guide", text=text)
+    else:
+        print(text)
+    return 0
+
+
 def cmd_check(args) -> int:
     settings = load_settings()
     ok = True
@@ -1234,7 +1245,9 @@ def cmd_languages(args) -> int:
 
 def main(argv=None) -> int:
     from . import __version__
-    ap = argparse.ArgumentParser(prog="localdub", description="Dub a video into another language in the creator's own voice.")
+    ap = argparse.ArgumentParser(prog="localdub", description="Dub a video into another language in the creator's own voice.",
+                                 epilog="Guides: 'localdub guide' (for AI agents: the loop, the files a run waits on, "
+                                        "the events) and docs/cli.md in the repository (for people).")
     ap.add_argument("--version", action="version", version=f"localdub {__version__}")
     sub = ap.add_subparsers(dest="cmd", required=True)
     common = argparse.ArgumentParser(add_help=False)  # options every command takes
@@ -1273,6 +1286,7 @@ def main(argv=None) -> int:
                    help="make this the channel's voice: a candidate's number, 'current' (keep it), a stretch "
                         "of the run's video (01:20-01:38) or a WAV file")
     sub.add_parser("check", parents=[common], help="check that the tools, models and server are in place")
+    sub.add_parser("guide", parents=[common], help="the guide for AI agents driving localdub: the loop, files, events")
     from .models import EFFORT_LEVELS, EFFORTS, KINDS, TASKS
     mo = sub.add_parser("models", parents=[common],
                         help="which model does each task (text, vision, voice, hearing, separation), on which server; "
@@ -1297,8 +1311,8 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     events.configure(args.json)
     try:
-        commands = {"run": cmd_run, "shorts": cmd_shorts, "voice": cmd_voice, "check": cmd_check, "models": cmd_models,
-                    "channel": cmd_channel, "languages": cmd_languages}
+        commands = {"run": cmd_run, "shorts": cmd_shorts, "voice": cmd_voice, "check": cmd_check,
+                    "models": cmd_models, "guide": cmd_guide, "channel": cmd_channel, "languages": cmd_languages}
         rc = commands[args.cmd](args)
     except Exception as e:  # a bug, not a handled error: still end the event stream with a result
         events.note(error=f"{type(e).__name__}: {e}")

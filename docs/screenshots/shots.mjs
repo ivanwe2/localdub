@@ -24,9 +24,7 @@ await shot("new-run", "#/new");
 await shot("review", "#/review/village-bakery");
 await shot("voices", "#/voices/market-day-ep12");
 await shot("shorts", "#/shorts/cheese-tour", { wait: 2500 });
-await shot("shorts-only", "#/shorts/saturday-clips", { wait: 2500 });
-await shot("new-run-shorts", "#/new", { act: (page) => page.getByRole("button", { name: "Shorts only" }).click() });
-await shot("models", "#/models", { wait: 2000 });
+await shot("models", "#/models", { wait: 2000, full: false, height: 1000 });
 
 // on air: the studio recorded while the demo engine voices its lines (one every 0.7 s)
 const size = { width: 1440, height: 680 };
