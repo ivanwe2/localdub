@@ -214,6 +214,7 @@ mod tests {
             prompt_per_s: None,
             chars: None,
             audio_seconds: None,
+            cost: None,
         })
     }
 

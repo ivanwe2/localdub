@@ -56,7 +56,9 @@ minutes.
   proposed: they stand alone, hook early and end on a payoff. Rendered 9:16 with big captions timed
   word by word as they're spoken, in the dub or the original language. Or skip the dub: *Shorts only* turns a video straight into Shorts.
 - **Your models, your choice.** Every task (text, vision, voice, hearing, separation) can use any model
-  on any server, your GPU box or an OpenAI-compatible API, picked and tried on the Models screen.
+  on any server, your GPU box or an OpenAI-compatible API, picked and tried on the Models screen. Or
+  one click for frontier models: the *OpenRouter* setup puts text and vision on hosted models (Claude,
+  GPT, Gemini…) to compare with your own, and every run shows its text model and what it cost.
 - **Yours to automate.** One command-line tool with JSON events and plain exit codes, so a person, a
   script or an AI agent can drive it, with a [guide](docs/cli.md) for people and `localdub guide` plus
   an [Agent Skill](skills/localdub/SKILL.md) for agents. The web app is built on the same commands.
@@ -205,6 +207,7 @@ localdub models                                  which model does each task, on 
           [--set TASK=SERVER/MODEL] [--effort USE=LEVEL] [--test TASK]
 localdub models --server NAME --url URL [--kind openai] [--key-stdin] [--remove]
                                                  add or change a server (any OpenAI-compatible one)
+localdub models --preset openrouter --key-stdin  text and vision on OpenRouter (--preset local: back)
 localdub guide                                   the guide for AI agents (docs/cli.md is the one for people)
 ```
 
@@ -280,6 +283,20 @@ localdub models --server cloud --url https://api.example.com --kind openai --key
 localdub models --set text=cloud/some-model --effort translate=default
 localdub models --test text
 ```
+
+**Ready-made: OpenRouter.** One key ([openrouter.ai/keys](https://openrouter.ai/keys)) for hundreds of
+hosted models, paid per use. `localdub models --preset openrouter --key-stdin < key.txt` (or *Use
+OpenRouter for text and vision* on the Models screen) adds the server `openrouter` and gives it text
+(Claude Sonnet 5.5) and vision (Gemini 4 Hydrogen); the voice clone, hearing and separation stay on
+your GPUs, as OpenRouter has no such models. The Models screen then suggests models per task with
+their prices (from Claude Opus 5.5 for the best translations to DeepSeek V4.1 Flash at about a cent
+per video), OpenRouter's reported cost of each request is added up per run, and `--preset local`
+puts text and vision back on your own server. The transcript, the translation and frames of the video
+go to OpenRouter and the model's provider.
+
+To compare a hosted model with your own: dub the same video again under another name
+(`--name video-sonnet`) with the other model on. Each run then shows which text model made it, how
+long its stages took and what its requests cost (`cost` and `models` in its `state.json`).
 
 ### For scripts, servers and agents: `--json`
 

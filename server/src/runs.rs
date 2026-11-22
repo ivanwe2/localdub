@@ -40,6 +40,11 @@ pub struct RunSummary {
     pub files: RunFiles,
     /// What a person has to do before the run can go on; None if nothing.
     pub waiting_for: Option<Waiting>,
+    /// What the run's model requests cost in USD, where a server says (hosted ones like OpenRouter);
+    /// None when nothing was charged.
+    pub cost: Option<f64>,
+    /// Which model did each task for it: task → "server/model" (as the stages last used them).
+    pub models: BTreeMap<String, String>,
 }
 
 /// A run waiting for a person: a file to edit and approve (its first line `status: approved`),
@@ -89,6 +94,10 @@ struct StateFile {
     /// Language ("dub" / "original") → the Shorts' paths.
     #[serde(default)]
     shorts: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    cost: Option<f64>,
+    #[serde(default)]
+    models: BTreeMap<String, String>,
 }
 
 #[derive(Default, serde::Deserialize)]
@@ -202,6 +211,8 @@ async fn read_summary(dir: &Path, name: String) -> std::io::Result<Option<RunSum
         finished,
         files,
         waiting_for,
+        cost: state.cost,
+        models: state.models,
     }))
 }
 
@@ -315,6 +326,8 @@ mod tests {
                     finished: false,
                     files: RunFiles::default(),
                     waiting_for: None,
+                    cost: None,
+                    models: BTreeMap::new(),
                 },
                 RunSummary {
                     name: "market".into(),
@@ -344,6 +357,8 @@ mod tests {
                         ..RunFiles::default()
                     },
                     waiting_for: None,
+                    cost: None,
+                    models: BTreeMap::new(),
                 },
             ]
         );
@@ -365,6 +380,25 @@ mod tests {
 
     async fn waiting(home: &Path, run: &str) -> Option<Waiting> {
         read_run(home, run).await.unwrap().unwrap().waiting_for
+    }
+
+    #[tokio::test]
+    async fn a_run_says_which_models_made_it_and_what_they_cost() {
+        let home = tempfile::tempdir().unwrap();
+        write_run(
+            home.path(),
+            "hosted",
+            r#"{"source": "/v.mp4", "channel": "c", "created": "2026-11-23T10:00:00", "done": ["prep", "translate"],
+                "cost": 0.42, "models": {"text": "openrouter/anthropic/claude-sonnet-5.5"}}"#,
+        );
+
+        let run = read_run(home.path(), "hosted").await.unwrap().unwrap();
+
+        assert_eq!(run.cost, Some(0.42));
+        assert_eq!(
+            run.models.get("text").map(String::as_str),
+            Some("openrouter/anthropic/claude-sonnet-5.5")
+        );
     }
 
     #[tokio::test]

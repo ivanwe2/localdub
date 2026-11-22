@@ -38,7 +38,8 @@ STATE.mkdir(parents=True, exist_ok=True)
 WORDS = json.loads(Path(sys.argv[3]).read_text(encoding="utf-8"))
 DEMUCS = sys.argv[4]
 KEY = "Bearer test-key"
-MODELS = ["gemma4-31b", "gemma4-31b-vision", "qwen3-tts", "nemotron", "demucs", "other"]
+MODELS = ["gemma4-31b", "gemma4-31b-vision", "qwen3-tts", "nemotron", "demucs", "other",
+          "vendor/hosted-model", "vendor/thinks-always"]  # the last two act like OpenRouter's: priced, costs reported
 VOICING = {"qwen3-tts", "nemotron"}  # the group that runs side by side; everything else swaps
 running = {"other"}
 voiced = {}  # take hash -> the text voiced, recorded by /tts so a transcribed take can be "heard" back
@@ -86,6 +87,8 @@ def chat_reply(content, tokens=100):
 
 class Handler(BaseHTTPRequestHandler):
     def send(self, obj, ctype="application/json", code=200):
+        if isinstance(obj, dict) and "usage" in obj and getattr(self, "hosted", False):
+            obj["usage"]["cost"] = 0.0025  # a hosted model says what the request cost (USD)
         out = obj if isinstance(obj, bytes) else json.dumps(obj).encode()
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -103,7 +106,9 @@ class Handler(BaseHTTPRequestHandler):
         if not self.authorized():
             return
         if self.path == "/v1/models":
-            return self.send({"object": "list", "data": [{"id": m, "object": "model"} for m in MODELS]})
+            return self.send({"object": "list", "data": [
+                {"id": m, "object": "model", **({"pricing": {"prompt": "0.000002", "completion": "0.00001"}} if "/" in m else {})}
+                for m in MODELS]})
         if self.path == "/running":
             return self.send({"running": [{"model": m, "state": "ready"} for m in sorted(running)]})
         self.send({"error": f"no route {self.path}"}, code=404)
@@ -130,6 +135,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.send({"error": f"no route {self.path}"}, code=404)
         b = json.loads(raw)
         load(b["model"])
+        self.hosted = "/" in b["model"]
+        if b["model"] == "vendor/thinks-always" and b.get("reasoning_effort") == "none":
+            return self.send({"error": {"code": 400, "message": "Reasoning is mandatory for this model and cannot be disabled"}},
+                             code=400)
         system, user = b["messages"][0]["content"], b["messages"][1]["content"]
         with open(STATE / "requests.log", "a", encoding="utf-8") as f:
             f.write(json.dumps({"model": b["model"], "system": system[:60], "effort": b.get("reasoning_effort"),

@@ -329,6 +329,54 @@ describe("Fixing a line", () => {
   });
 });
 
+describe("Ready-made setups", () => {
+  it("OpenRouter takes its key once, suggests models with prices, and goes back to your own models", async () => {
+    const openrouter = {
+      name: "openrouter", url: "https://openrouter.ai/api", kind: "openai", key_set: false, key_source: null, remote: true, reachable: true,
+      error: null,
+      models: [
+        { id: "anthropic/claude-sonnet-5.5", name: "Claude Sonnet 5.5", description: null, price: { in: 2, out: 10 } },
+        { id: "deepseek/deepseek-v4.1-flash", name: null, description: null, price: { in: 0.05, out: 0.2 } },
+        { id: "some/other", name: null, description: null, price: { in: 1, out: 1 } },
+      ],
+    };
+    const preset = (over: object) => ({
+      name: "openrouter", title: "OpenRouter", what: "Hosted models.", url: "https://openrouter.ai/api", keys_at: "https://openrouter.ai/keys",
+      server: "openrouter", set_up: false, key_set: false, active: false, tasks: { text: "anthropic/claude-sonnet-5.5" },
+      suggested: { text: [{ id: "anthropic/claude-sonnet-5.5", why: "strong", listed: true, price: { in: 2, out: 10 } }, { id: "gone/model", why: "x", listed: false, price: null }] },
+      ...over,
+    });
+    const local = { ...preset({}), name: "local", title: "Your own models", url: null, keys_at: "", server: "main", suggested: {} };
+    const sent = serve({
+      "GET /api/models": { ...OVERVIEW, presets: [preset({}), local] },
+      "POST /api/models/presets/openrouter": "",
+    });
+    render(<ModelsScreen busy={false} />);
+
+    const ready = await screen.findByRole("region", { name: "Ready-made" });
+    const use = within(ready).getByRole("button", { name: "Use OpenRouter for text and vision" });
+    expect(use).toHaveProperty("disabled", true); // a key first
+    fireEvent.change(within(ready).getByLabelText(/Its API key/), { target: { value: " sk-or-123 " } });
+    fireEvent.click(use);
+    await waitFor(() => expect(sent.some((r) => r.method === "POST")).toBe(true));
+    const post = sent.find((r) => r.method === "POST")!;
+    expect([post.url, JSON.parse(post.body!)]).toEqual(["/api/models/presets/openrouter", { key: "sk-or-123" }]);
+
+    cleanup();
+    serve({ "GET /api/models": { ...OVERVIEW, servers: [...OVERVIEW.servers, openrouter], presets: [preset({ active: true, key_set: true, set_up: true }), local],
+      tasks: OVERVIEW.tasks.map((t) => (t.task === "text" ? { ...t, server: "openrouter", model: "anthropic/claude-sonnet-5.5" } : t)) } });
+    render(<ModelsScreen busy={false} />);
+    const text = await screen.findByRole("region", { name: "Text" });
+    const groups = [...text.querySelectorAll("optgroup")].map((g) => [g.label, [...g.querySelectorAll("option")].map((o) => o.value)]);
+    expect(groups).toEqual([
+      ["Suggested", ["anthropic/claude-sonnet-5.5"]],
+      ["Every model it offers", ["deepseek/deepseek-v4.1-flash", "some/other"]],
+    ]);
+    expect(within(text).getByText(/2 in · .10 out per M tokens/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Back to your own models" })).toBeTruthy();
+  });
+});
+
 describe("Notifications", () => {
   it("the bell asks the browser once, then tells when the run on air waits for you", async () => {
     const shown: { title: string; body?: string }[] = [];

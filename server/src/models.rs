@@ -114,6 +114,35 @@ impl ServerChange {
     }
 }
 
+/// The body of POST /api/models/presets/{name}: the setup's key, if it needs one (it goes to the
+/// engine on stdin).
+#[derive(Debug, Default, PartialEq, Deserialize)]
+pub struct PresetRequest {
+    #[serde(default)]
+    pub key: Option<String>,
+}
+
+impl PresetRequest {
+    /// `models --preset NAME [--key-stdin]`, and the key for stdin. Which setups there are is the
+    /// engine's to say (an unknown one is refused there).
+    pub fn args(&self, name: &str) -> Result<(Vec<String>, Option<String>), String> {
+        if !is_server_name(name) {
+            return Err(format!("setup {name:?}: {SERVER_RULE}"));
+        }
+        let key = self.key.as_ref().map(|k| k.trim().to_string());
+        if let Some(key) = &key
+            && (key.is_empty() || key.len() > 4096 || key.chars().any(char::is_control))
+        {
+            return Err("the key: one line of text".into());
+        }
+        let mut args = vec!["models".to_string(), "--preset".into(), name.into()];
+        if key.is_some() {
+            args.push("--key-stdin".into());
+        }
+        Ok((args, key))
+    }
+}
+
 /// `models --server NAME --remove`.
 pub fn remove_args(name: &str) -> Result<Vec<String>, String> {
     if !is_server_name(name) {

@@ -127,6 +127,9 @@ pub struct Call {
     pub chars: Option<u64>,
     /// For a transcription: the audio's length.
     pub audio_seconds: Option<f64>,
+    /// What the request cost in USD, where the server says (OpenRouter does).
+    #[serde(default)]
+    pub cost: Option<f64>,
 }
 
 /// One line of the engine's output as an event; None if the line isn't one (not JSON, or no

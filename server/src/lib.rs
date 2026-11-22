@@ -743,6 +743,19 @@ async fn put_model_server(
     engine_change(&state, args, key, StatusCode::UNPROCESSABLE_ENTITY).await
 }
 
+/// POST /api/models/presets/{name} `{"key": "…"}`: a ready-made setup, e.g. "openrouter" (text and
+/// vision on OpenRouter; its key on the engine's stdin) or "local" (back to your own models).
+async fn apply_model_preset(
+    State(state): State<AppState>,
+    UrlPath(name): UrlPath<String>,
+    Json(req): Json<models::PresetRequest>,
+) -> Result<StatusCode, Failure> {
+    let (args, key) = req
+        .args(&name)
+        .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e))?;
+    engine_change(&state, args, key, StatusCode::UNPROCESSABLE_ENTITY).await
+}
+
 /// DELETE /api/models/servers/{name}: refused (409) while a task uses it, and for `main`.
 async fn delete_model_server(
     State(state): State<AppState>,
@@ -879,6 +892,7 @@ pub fn app(state: AppState) -> Router {
             put(put_model_server).delete(delete_model_server),
         )
         .route("/models/test", post(test_model))
+        .route("/models/presets/{name}", post(apply_model_preset))
         .route_service(
             "/models/test/voice.wav",
             ServeFile::new(state.home.join(".models-test").join("voice.wav")),
@@ -1756,8 +1770,20 @@ mod tests {
             send_body(a(), "PUT", "/api/models/servers/cloud", server("other")).await;
         let (kept, stays) = send_body(a(), "DELETE", "/api/models/servers/main", json!(null)).await;
         let (removed, _) = send_body(a(), "DELETE", "/api/models/servers/cloud", json!(null)).await;
+        let keyed_preset = json!({"key": " sk-test
+"});
+        let (preset, _) = post_json(a(), "/api/models/presets/openrouter", keyed_preset).await;
+        let (local, _) = post_json(a(), "/api/models/presets/local", json!({})).await;
+        let (odd, _) = post_json(a(), "/api/models/presets/--help", json!({})).await;
 
         assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            preset,
+            StatusCode::NO_CONTENT,
+            "the setup's key came on stdin, trimmed"
+        );
+        assert_eq!(local, StatusCode::NO_CONTENT);
+        assert_eq!(odd, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(overview["tasks"][0]["model"], "gemma4-31b");
         assert_eq!(set, StatusCode::NO_CONTENT);
         assert_eq!(refused, StatusCode::UNPROCESSABLE_ENTITY);

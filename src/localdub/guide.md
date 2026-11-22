@@ -90,6 +90,7 @@ or `--new-take`; ask the person before changing words they approved. Exit 0 = do
 | `localdub channel NAME [--speaker man\|woman\|none]` | a channel's languages, speaker, voice |
 | `localdub models [--set TASK=SERVER/MODEL] [--effort USE=LEVEL] [--test TASK]` | which model does each task (text, vision, voice, hearing, separation), on which server; try one |
 | `localdub models --server NAME --url URL --kind llama-swap\|openai [--key-stdin] \| --remove` | add, change or remove a server |
+| `localdub models --preset openrouter --key-stdin` / `--preset local` | text and vision on OpenRouter (costs money; ask first) / back on your own server |
 | `localdub guide` | this guide |
 
 Every command takes `--json`. Runs live in `~/dub/runs/NAME/` (the dubbed video `NAME.LANG.mp4`,

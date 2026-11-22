@@ -5,16 +5,19 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  applyPreset,
   getModels,
   type ModelServerInfo,
   type ModelsOverview,
   type ModelTest,
+  type Preset,
   removeModelServer,
   saveModels,
   saveModelServer,
   type TaskInfo,
   testModel,
 } from "../api";
+import { priceText, usd } from "../format";
 import { ErrorText, message } from "./common";
 
 /** What the text model thinks about, each with its own level, in the order they happen. */
@@ -81,6 +84,7 @@ export default function ModelsScreen({ busy }: { busy: boolean }) {
             ))}
           </div>
           <aside className="side stack" style={{ gap: 24 }}>
+            {(data.presets ?? []).some((p) => p.url) && <ReadyMade data={data} onChange={load} />}
             <Servers data={data} onChange={load} />
           </aside>
         </div>
@@ -107,6 +111,10 @@ function TaskCard({ info, data, busy, onSaved }: { info: TaskInfo; data: ModelsO
   const options = model && !listed.some((m) => m.id === model) ? [{ id: model, name: "not listed by this server", description: null }, ...listed] : listed;
   const chosen = listed.find((m) => m.id === model);
   const changed = server !== info.server || model !== info.model;
+  // a ready-made setup's suggestions for this task, first in the list when its server is picked
+  const suggested = (data.presets ?? []).find((p) => p.server === server && p.url)?.suggested[info.task]?.filter((x) => x.listed) ?? [];
+  const others = options.filter((m) => !suggested.some((x) => x.id === m.id));
+  const label = (m: { id: string; name: string | null }) => (m.name ? `${m.id} · ${m.name}` : m.id);
 
   async function save() {
     setError(null);
@@ -169,16 +177,36 @@ function TaskCard({ info, data, busy, onSaved }: { info: TaskInfo; data: ModelsO
           Model
           {listed.length > 0 ? (
             <select value={model} onChange={(e) => setModel(e.target.value)}>
-              {options.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name ? `${m.id} · ${m.name}` : m.id}
-                </option>
-              ))}
+              {suggested.length > 0 ? (
+                <>
+                  <optgroup label="Suggested">
+                    {suggested.map((x) => (
+                      <option key={x.id} value={x.id}>
+                        {x.id} · {x.why}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Every model it offers">
+                    {others.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {label(m)}
+                      </option>
+                    ))}
+                  </optgroup>
+                </>
+              ) : (
+                options.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {label(m)}
+                  </option>
+                ))
+              )}
             </select>
           ) : (
             <input className="mono" value={model} onChange={(e) => setModel(e.target.value)} placeholder="its name on that server" />
           )}
           <small>
+            {chosen?.price && `${priceText(chosen.price)}. `}
             {chosen?.description ??
               (listed.length ? "" : srv?.reachable ? "this server lists no models: type the name" : "the server isn't reachable now")}
           </small>
@@ -276,9 +304,107 @@ function TestResult({ result }: { result: ModelTest }) {
       <strong>{result.ok ? "Works" : "Didn’t work"}</strong>
       <span className="mono small muted">
         {result.model} on {result.server} · {result.seconds} s{result.tok_per_s ? ` · ${result.tok_per_s} tok/s` : ""}
+        {result.cost ? ` · ${usd(result.cost)}` : ""}
       </span>
       <span className="small">{result.detail}</span>
       {clip && <audio controls src={clip} />}
+    </div>
+  );
+}
+
+/** The hosted setups in one click (OpenRouter): its key, then text and vision on it; and the way back. */
+function ReadyMade({ data, onChange }: { data: ModelsOverview; onChange: () => void }) {
+  const presets = data.presets ?? [];
+  const local = presets.find((p) => !p.url);
+  return (
+    <section className="panel" aria-labelledby="ready-made">
+      <div className="panel-head">
+        <h2 id="ready-made">Ready-made</h2>
+      </div>
+      <div className="stack" style={{ gap: 18 }}>
+        {presets
+          .filter((p) => p.url)
+          .map((p) => (
+            <PresetCard key={p.name} preset={p} local={local} onChange={onChange} />
+          ))}
+      </div>
+    </section>
+  );
+}
+
+function PresetCard({ preset, local, onChange }: { preset: Preset; local?: Preset; onChange: () => void }) {
+  const [key, setKey] = useState("");
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const uses = Object.entries(preset.tasks)
+    .map(([task, model]) => `${task}: ${model}`)
+    .join(" · ");
+
+  async function apply(name: string, withKey?: string) {
+    setError(null);
+    setWorking(true);
+    try {
+      await applyPreset(name, withKey);
+      setKey("");
+      onChange();
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <div className="preset">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <strong>{preset.title}</strong>
+        {preset.active ? <span className="chip ok">in use</span> : preset.key_set ? <span className="chip">key saved</span> : null}
+      </div>
+      <p className="small muted" style={{ margin: "6px 0 10px" }}>
+        {preset.what}
+      </p>
+      <p className="small mono" style={{ margin: "0 0 10px" }}>
+        {uses}
+      </p>
+      {preset.active ? (
+        local && (
+          <button type="button" className="btn small" disabled={working} onClick={() => apply(local.name)}>
+            {working ? "Switching…" : `Back to ${local.title.toLowerCase()}`}
+          </button>
+        )
+      ) : (
+        <form
+          className="stack"
+          style={{ gap: 8 }}
+          onSubmit={(e: FormEvent) => {
+            e.preventDefault();
+            void apply(preset.name, key.trim() || undefined);
+          }}
+        >
+          {!preset.key_set && (
+            <label className="field" style={{ flex: "0 0 auto" }}>
+              Its API key
+              <input type="password" autoComplete="off" value={key} onChange={(e) => setKey(e.target.value)} placeholder="sk-or-…" />
+              <small>
+                Kept on the server, readable only by its owner, never shown again.{" "}
+                {preset.keys_at && (
+                  <a href={preset.keys_at} target="_blank" rel="noreferrer">
+                    Get a key
+                  </a>
+                )}
+              </small>
+            </label>
+          )}
+          <button type="submit" className="btn primary small" disabled={working || (!preset.key_set && !key.trim())}>
+            {working ? "Setting it up…" : `Use ${preset.title} for text and vision`}
+          </button>
+        </form>
+      )}
+      <p className="small faint" style={{ margin: "10px 0 0" }}>
+        To compare: dub the same video again under another name with this on, then look at both runs: each shows its text
+        model and what its requests cost.
+      </p>
+      <ErrorText error={error} />
     </div>
   );
 }
