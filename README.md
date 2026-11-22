@@ -55,8 +55,11 @@ minutes.
 - **Shorts on the side.** A vision model watches the video, then the strongest 25-60 s stretches are
   proposed: they stand alone, hook early and end on a payoff. Rendered 9:16 with big captions, in the
   dub or the original language. Or skip the dub: *Shorts only* turns a video straight into Shorts.
+- **Your models, your choice.** Every task (text, vision, voice, hearing, separation) can use any model
+  on any server, your GPU box or an OpenAI-compatible API, picked and tried on the Models screen.
 - **Yours to automate.** One command-line tool with JSON events and plain exit codes, so a person, a
-  script or an AI agent can drive it. The web app is built on the same commands.
+  script or an AI agent can drive it, with a [guide](docs/cli.md) for people and `localdub guide` plus
+  an [Agent Skill](skills/localdub/SKILL.md) for agents. The web app is built on the same commands.
 
 ## A look inside
 
@@ -78,12 +81,15 @@ minutes.
     <td><b>Start a run.</b> Upload a video, paste a link, or use one already on the box. One channel per voice and language pair.</td>
   </tr>
   <tr>
+    <td><img src="docs/images/models.png" alt="Models: a card per task with its server and model, how hard the text model thinks, Try it, and the servers"></td>
     <td><img src="docs/images/studio-light.png" alt="The studio in light mode, with the AI console's speed meters and the GPUs"></td>
-    <td align="center"><img src="docs/images/phone.png" width="300" alt="The studio on a phone"></td>
   </tr>
   <tr>
-    <td><b>Watch it work.</b> Tokens per second on LED meters, both GPUs live, every model request listed.</td>
-    <td><b>Dark or light, desk or phone.</b> It follows your system.</td>
+    <td><b>Choose the models.</b> Any model on any server for each task, with what it needs, how hard it thinks, and a <i>Try it</i>.</td>
+    <td><b>Watch it work.</b> Tokens per second on LED meters, both GPUs live, every model request listed. Dark or light, following your system.</td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="docs/images/phone.png" width="300" alt="The studio on a phone"><br><b>On a phone, too.</b></td>
   </tr>
 </table>
 
@@ -164,6 +170,11 @@ bash ~/localdub/deploy/update.sh                     # engine, yt-dlp and the la
 ssh -N -L 8080:127.0.0.1:8080 root@gpu-box           # laptop, then open http://localhost:8080
 ```
 
+**Guides.** The command line step by step, every file you edit and what to do when something goes
+wrong: [docs/cli.md](docs/cli.md). For AI agents: `localdub guide` prints the whole loop (commands,
+exit codes, the files a run waits on, the events), and [skills/localdub](skills/localdub/SKILL.md) is
+an Agent Skill that points them to it (Claude Code: `cp -r skills/localdub ~/.claude/skills/`).
+
 ## Commands
 
 ```
@@ -186,6 +197,7 @@ localdub models                                  which model does each task, on 
           [--set TASK=SERVER/MODEL] [--effort USE=LEVEL] [--test TASK]
 localdub models --server NAME --url URL [--kind openai] [--key-stdin] [--remove]
                                                  add or change a server (any OpenAI-compatible one)
+localdub guide                                   the guide for AI agents (docs/cli.md is the one for people)
 ```
 
 Exit codes: 0 done, 3 waiting for a human, 1 error.

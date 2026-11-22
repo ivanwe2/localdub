@@ -48,7 +48,8 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
 | `deploy/server/` | the web app on a Linux box: `build.sh` (dev container or CI → `dist/localdub-app.tar.gz`: static musl server + page + `BUILD`), `install.sh` (→ `/opt/localdub`, systemd `localdub-server`, 127.0.0.1:8080; refuses while a run or download is going unless `--force`; laptop uses `ssh -N -L 8080:127.0.0.1:8080`), `yt-dlp.sh` (yt-dlp + Deno into /usr/local/bin, checksums checked; `yt-dlp -U` once installed) |
 | `deploy/update.sh` | on CT 103: engine (git pull + venv install), yt-dlp (install/update) and the latest web app from the GitHub release `app` (CI `release.yml` rebuilds it on every merge to main touching server/web/deploy-server) |
 | `web/` | React + TypeScript page (Vite), the "control room" look: `src/api.ts` (API types/client), `src/hooks.ts` (live job/status/download, runs, channels, the `#/…` route, theme), `src/App.tsx` (screens), `src/components/` (`OnAir` run as timeline tracks + stage strip, `Console` AI meters + machines, `RunList`, `NewRun` + download box, `ReviewScreen` structured review 1/2 editing, `ShortsScreen` timeline markers + 9:16 preview + sentence cuts, `VoicePicker`/`VoiceScreen`, `ModelsScreen` (servers, the five tasks, thinking levels, Try it), `WaveField` background, `Header`), `src/theme.css` (tokens, dark/light), `src/studio.ts` + `src/format.ts` (pure helpers, tested), `components.test.tsx` (jsdom), `public/` (favicon: waveform bars, cream → "on air" orange) |
-| `docs/` | `images/` the README's screenshots + `studio.gif`; `screenshots/` makes them (`sh docs/screenshots/shots.sh` in the dev container): a made-up home (`demo_home.py`), a stand-in engine and llama-swap, the real server + page in headless Chromium (playwright). Never real media or voices |
+| `docs/` | `cli.md` the command-line guide for people (jobs step by step, every command, the files you edit, troubleshooting); `images/` the README's screenshots + `studio.gif`; `screenshots/` makes them (`sh docs/screenshots/shots.sh` in the dev container): a made-up home (`demo_home.py`), a stand-in engine and llama-swap, the real server + page in headless Chromium (playwright). Never real media or voices |
+| `src/localdub/guide.md`, `skills/localdub/SKILL.md` | the guide for AI agents (`localdub guide` prints it: the loop, exit codes, the files a run waits on, events) and an Agent Skill pointing to it; `tests/test_guide.py` keeps both and `docs/cli.md` in step with the commands |
 
 ## Conventions
 
@@ -153,7 +154,9 @@ levels, mux, subtitles). Shorts: `shorts.py` (motion, Gemma vision, ranked candi
    `check` per task's server, `call` events name their `server`; a server moved to another address
    forgets its saved key. Models screen (`#/models`): routes `/api/models…` (keys only on stdin;
    tests refused while a run is on air, one at a time; children killed when the server stops
-   waiting). **Next**: the guides, then a CT 103 checkpoint (ask first). Token auth only if
+   waiting). Guides (engine 0.14.0): `docs/cli.md`, `localdub guide`, `skills/localdub/SKILL.md`.
+   **Next**: a CT 103 checkpoint (ask first): update, a Shorts-only run, Models: Try it on all
+   five tasks, translation at "low" on the 13-min video (was ~20 min). Token auth only if
    LAN use is wanted (until then: SSH tunnel). CT 103
    is sometimes used for gaming: ask before running things there.
 5. App image (multi-stage) + docker compose; GPU-side services on CT 103.
