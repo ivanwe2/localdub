@@ -39,7 +39,7 @@ use crate::download::{Download, DownloadRequest, DownloadState};
 use crate::events::{Event, Language};
 use crate::job::{Job, JobState};
 use crate::runs::{RunSummary, Waiting};
-use crate::start::{ShortsLang, ShortsRequest, StartRequest};
+use crate::start::{LineRequest, ShortsLang, ShortsRequest, StartRequest};
 use crate::status::{ModelServer, Status};
 use crate::videos::Video;
 use crate::voice::{PickRequest, VoiceSamples};
@@ -136,6 +136,17 @@ async fn health() -> Json<Health> {
 /// once. One job at a time: while one is running, 409 Conflict. Every endpoint that starts the
 /// engine (a new run, continuing one, Shorts) goes through here.
 fn launch(state: &AppState, run: &str, args: Vec<String>) -> Result<Job, Failure> {
+    launch_with_input(state, run, args, None)
+}
+
+/// The same, with `input` (one line) on the engine's stdin: words a person typed, which never go
+/// on its command line.
+fn launch_with_input(
+    state: &AppState,
+    run: &str,
+    args: Vec<String>,
+    input: Option<String>,
+) -> Result<Job, Failure> {
     let Some((program, before)) = state.engine.split_first() else {
         return Err(server_error(
             "no engine command configured (LOCALDUB_ENGINE)",
@@ -165,9 +176,10 @@ fn launch(state: &AppState, run: &str, args: Vec<String>) -> Result<Job, Failure
     all_args.extend(args);
     let job = state.job.clone();
     tokio::spawn(async move {
-        let outcome = runner::run_engine(
+        let outcome = runner::run_engine_with_input(
             &program,
             &all_args,
+            input,
             |event| {
                 job.send_modify(|current| {
                     if let Some(job) = current {
@@ -345,6 +357,30 @@ async fn revoice(
         return Err((StatusCode::CONFLICT, msg));
     }
     let job = launch(&state, &name, start::revoice_args(&name))?;
+    Ok((StatusCode::ACCEPTED, Json(job)))
+}
+
+/// POST /api/runs/{name}/lines/{id} `{"text": "…"}` and/or `{"new_take": true}`: fixes one line of
+/// a finished dub (`localdub line <name> <id>`, the words on its stdin): the line is voiced again,
+/// the dub mixed again, and the dubbed Shorts with the line rendered again.
+async fn fix_line(
+    State(state): State<AppState>,
+    UrlPath((name, id)): UrlPath<(String, u32)>,
+    Json(req): Json<LineRequest>,
+) -> Result<(StatusCode, Json<Job>), Failure> {
+    let run = find_run(&state, &name).await?;
+    if run.mode == "shorts" {
+        let msg = format!("'{name}' is Shorts only: it has no dub to fix");
+        return Err((StatusCode::CONFLICT, msg));
+    }
+    if !run.finished {
+        let msg = format!("'{name}' isn't dubbed yet; lines are fixed after the dub");
+        return Err((StatusCode::CONFLICT, msg));
+    }
+    let (args, words) = req
+        .engine_args(&name, id)
+        .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e))?;
+    let job = launch_with_input(&state, &name, args, words)?;
     Ok((StatusCode::ACCEPTED, Json(job)))
 }
 
@@ -833,6 +869,7 @@ pub fn app(state: AppState) -> Router {
         )
         .route("/runs/{name}/voice/pick", post(pick_voice))
         .route("/runs/{name}/revoice", post(revoice))
+        .route("/runs/{name}/lines/{id}", post(fix_line))
         .route("/runs/{name}/waveform", get(get_waveform))
         .route("/channels", get(get_channels))
         .route("/languages", get(get_languages))
@@ -1486,6 +1523,40 @@ mod tests {
 
         assert_eq!(half, StatusCode::CONFLICT);
         assert_eq!(finished, StatusCode::ACCEPTED);
+        assert_eq!(job_when_settled(&state).await["state"], "done");
+    }
+
+    #[tokio::test]
+    async fn a_line_of_a_finished_dub_is_fixed_with_its_words_on_stdin() {
+        let home = tempfile::tempdir().unwrap();
+        let state = test_state(home.path());
+        make_run(&state, "half", BEFORE_REVIEW1, &[]);
+        make_run(&state, "done-run", FINISHED, &[]);
+        let words = json!({"text": "Hello\n there."});
+
+        let (half, _) =
+            post_json(app(state.clone()), "/api/runs/half/lines/3", words.clone()).await;
+        let (nothing, _) =
+            post_json(app(state.clone()), "/api/runs/done-run/lines/3", json!({})).await;
+        let (not_a_line, _) = post_json(
+            app(state.clone()),
+            "/api/runs/done-run/lines/x",
+            words.clone(),
+        )
+        .await;
+        let (fixed, _) = post_json(app(state.clone()), "/api/runs/done-run/lines/3", words).await;
+
+        assert_eq!(half, StatusCode::CONFLICT);
+        assert_eq!(nothing, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(not_a_line, StatusCode::BAD_REQUEST);
+        assert_eq!(fixed, StatusCode::ACCEPTED);
+        let job = job_when_settled(&state).await;
+        assert_eq!(job["state"], "done", "{job}");
+        assert_eq!(job["stages"], json!(["voice", "mix"]));
+
+        let take = json!({"new_take": true});
+        let (again, _) = post_json(app(state.clone()), "/api/runs/done-run/lines/3", take).await;
+        assert_eq!(again, StatusCode::ACCEPTED);
         assert_eq!(job_when_settled(&state).await["state"], "done");
     }
 

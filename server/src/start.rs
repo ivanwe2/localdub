@@ -120,6 +120,55 @@ impl ShortsLang {
     }
 }
 
+/// The body of POST /api/runs/{name}/lines/{id}: new words for one line of a finished dub (empty:
+/// the line stays silent), or another take of the words it has, or both.
+#[derive(Debug, Default, PartialEq, Deserialize)]
+pub struct LineRequest {
+    /// The line's new words in the dub language; None keeps them.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Voice it again with new seeds.
+    #[serde(default)]
+    pub new_take: bool,
+}
+
+/// The longest line the page may send, in characters (a dub line is a sentence or two).
+pub const MAX_LINE_CHARS: usize = 1000;
+
+impl LineRequest {
+    /// The engine's arguments, `line <run> <id> [--text-stdin] [--new-take]`, and the words for its
+    /// stdin. Words a person typed never go on the command line: they may start with '-' and would
+    /// read as an option.
+    pub fn engine_args(&self, run: &str, id: u32) -> Result<(Vec<String>, Option<String>), String> {
+        let mut args = vec!["line".to_string(), run.to_string(), id.to_string()];
+        let words = match &self.text {
+            Some(text) if text.chars().any(|c| c.is_control() && !c.is_whitespace()) => {
+                return Err("the line's words have control characters in them".to_string());
+            }
+            Some(text) => {
+                // one line, as the engine reads it: every run of spaces or line breaks becomes a space
+                let one_line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                if one_line.chars().count() > MAX_LINE_CHARS {
+                    let msg = format!("a line has at most {MAX_LINE_CHARS} characters");
+                    return Err(msg);
+                }
+                args.push("--text-stdin".to_string());
+                Some(one_line)
+            }
+            None => None,
+        };
+        if self.new_take {
+            args.push("--new-take".to_string());
+        }
+        if words.is_none() && !self.new_take {
+            return Err(
+                "give the line new words (text) or ask for a new take (new_take)".to_string(),
+            );
+        }
+        Ok((args, words))
+    }
+}
+
 pub const NAME_RULE: &str =
     "use letters, digits, '.', '_' and '-', starting with a letter or digit, at most 64 characters";
 
@@ -289,6 +338,46 @@ mod tests {
             shorts_args("market", ShortsLang::Original.as_str()),
             ["shorts", "market", "--lang", "original"]
         );
+    }
+
+    #[test]
+    fn a_fixed_line_sends_its_words_on_stdin() {
+        let words = LineRequest {
+            text: Some("  --not an option,\n\tjust words ".into()),
+            new_take: false,
+        };
+        let take = LineRequest {
+            text: None,
+            new_take: true,
+        };
+        let silent = LineRequest {
+            text: Some(String::new()),
+            new_take: false,
+        };
+
+        let (args, input) = words.engine_args("market", 31).unwrap();
+        assert_eq!(args, ["line", "market", "31", "--text-stdin"]);
+        assert_eq!(input.as_deref(), Some("--not an option, just words"));
+        let (args, input) = take.engine_args("market", 31).unwrap();
+        assert_eq!((args.last().unwrap().as_str(), input), ("--new-take", None));
+        assert_eq!(
+            silent.engine_args("market", 2).unwrap().1.as_deref(),
+            Some("")
+        );
+        assert!(
+            LineRequest::default().engine_args("market", 1).is_err(),
+            "nothing to do"
+        );
+        let long = LineRequest {
+            text: Some("a".repeat(MAX_LINE_CHARS + 1)),
+            new_take: false,
+        };
+        let control = LineRequest {
+            text: Some("bell\u{7}".into()),
+            new_take: false,
+        };
+        assert!(long.engine_args("market", 1).is_err());
+        assert!(control.engine_args("market", 1).is_err());
     }
 
     #[test]
