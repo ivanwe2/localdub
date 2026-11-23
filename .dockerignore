@@ -1,0 +1,25 @@
+# what the image build never needs (and private files that must never end up in an image)
+.git
+.github
+.devcontainer
+.claude
+CLAUDE.md
+CLAUDE.local.md
+notes
+dist
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+server/target
+web/dist
+docs
+tests
+skills
+*.mp4
+*.mkv
+*.webm
+*.wav
+*.gguf
+*.npy
+.env

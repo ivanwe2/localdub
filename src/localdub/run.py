@@ -1418,7 +1418,8 @@ def cmd_languages(args) -> int:
         installed = dictionary_installed(lang.hunspell)
         rows.append({"code": lang.code, "name": lang.name, "dub": lang.code in dub,
                      "dictionary": lang.hunspell or None, "dictionary_installed": installed, "apt": lang.apt or None})
-        dict_note = "dictionary installed" if installed else f"no dictionary (apt-get install {lang.apt})"
+        dict_note = ("dictionary installed" if installed else f"no dictionary (apt-get install {lang.apt})" if lang.apt
+                     else "no spelling dictionary (Debian has none)")
         log(f"  {lang.code}  {lang.name:<11} {'can be dubbed into' if lang.code in dub else 'video only':<19} {dict_note}")
     events.emit("languages", languages=rows)
     return 0

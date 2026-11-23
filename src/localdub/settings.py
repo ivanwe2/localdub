@@ -110,9 +110,14 @@ def _merge(base: dict, extra: dict) -> dict:
 
 
 def load_settings() -> dict:
+    """The defaults, with settings.json over them. $LOCALDUB_LLM_URL gives the model server's address when
+    settings.json doesn't (the Docker image's way to point at your llama-swap)."""
     path = home() / "settings.json"
     data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    return _merge(DEFAULT_SETTINGS, data)
+    settings = _merge(DEFAULT_SETTINGS, data)
+    if "llm_url" not in data and os.environ.get("LOCALDUB_LLM_URL"):
+        settings["llm_url"] = os.environ["LOCALDUB_LLM_URL"]
+    return settings
 
 
 class Profile:

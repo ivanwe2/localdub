@@ -41,6 +41,13 @@ def test_without_new_settings_every_task_is_on_main_as_before(home):
         "separation": {"server": "main", "model": "demucs"}}
 
 
+def test_the_model_server_can_come_from_the_environment_unless_settings_say(home, monkeypatch):
+    monkeypatch.setenv("LOCALDUB_LLM_URL", "http://gpu-box:9876")
+    assert models.servers(load_settings())["main"]["url"] == "http://gpu-box:9876"
+    (home / "settings.json").write_text(json.dumps({"llm_url": "http://other:9876"}))
+    assert models.servers(load_settings())["main"]["url"] == "http://other:9876"
+
+
 def test_tasks_move_to_other_servers_and_the_thinking_levels_change(home):
     assert main(["models", "--server", "cloud", "--url", "https://api.example.com/v1/", "--kind", "openai"]) == 0
     assert main(["models", "--set", "text=cloud/org/model-1"]) == 0  # a model name may have slashes
