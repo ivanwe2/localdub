@@ -178,6 +178,23 @@ bash ~/localdub/deploy/update.sh                     # engine, yt-dlp and the la
 ssh -N -L 8080:127.0.0.1:8080 root@gpu-box           # laptop, then open http://localhost:8080
 ```
 
+**Or with Docker**, on any machine with Docker (the models stay on your GPU box, or on OpenRouter):
+
+```
+curl -O https://raw.githubusercontent.com/ivanwe2/localdub/main/compose.yaml
+echo "LOCALDUB_LLM_URL=http://gpu-box:9876" > .env     # your llama-swap; LLAMA_API_KEY=… if it has a key
+docker compose up -d                                  # then open http://localhost:8080
+docker compose run --rm localdub localdub check       # is everything in place?
+```
+
+The image (`ghcr.io/ivanwe2/localdub`, rebuilt on every change and every week for a fresh yt-dlp) has
+the web app and the engine with ffmpeg, every language's spelling dictionary, yt-dlp and the speaker
+model on the CPU (`docker build --build-arg SPEAKER=0 .` leaves that out, about 1 GB smaller). Channels,
+runs, uploaded videos, `settings.json` and saved keys live in the volume `localdub-data`. It listens on
+this machine only, like the systemd service: reach it from elsewhere through an SSH tunnel. Model
+servers can also be set later on the *Models* screen (a llama-swap on the Docker host itself is
+`http://host.docker.internal:9876`, the default).
+
 **Guides.** The command line step by step, every file you edit and what to do when something goes
 wrong: [docs/cli.md](docs/cli.md). For AI agents: `localdub guide` prints the whole loop (commands,
 exit codes, the files a run waits on, the events), and [skills/localdub](skills/localdub/SKILL.md) is
@@ -406,6 +423,7 @@ The API:
 | `GET /api/languages` | the languages localdub knows (`localdub languages`): which can be dubbed into, which dictionaries are installed |
 | `GET` / `PUT /api/models` | the servers, the model doing each task and what each needs, the thinking levels (`localdub models`); change them: `{"tasks": {"text": {"server": "main", "model": "…"}}, "efforts": {"translate": "low"}}` |
 | `PUT` / `DELETE /api/models/servers/<name>` | add or change a server: `{"url", "kind", "key"}` (the key goes to the engine on stdin and never comes back); remove one no task uses |
+| `POST /api/models/presets/<name>` | a ready-made setup: `openrouter` with `{"key": "…"}` (on stdin), or `local` |
 | `POST /api/models/test`, `GET /api/models/test/voice.wav` | try a task with one small real request: `{"task": "voice"}` (not while a run is on air); the voice test's clip |
 | `GET` / `PUT /api/runs/<run>/review` | the file the run waits for: read it, save it (plain text) |
 | `POST /api/runs/<run>/continue` | go on after a review or an error, or render the picked Shorts |

@@ -1,0 +1,29 @@
+# localdub in Docker: `docker compose up -d`, then open http://localhost:8080
+#
+# Set where your models are, in a file `.env` next to this one (or later, on the Models screen):
+#   LOCALDUB_LLM_URL=http://gpu-box:9876     your llama-swap (default: one on this machine)
+#   LLAMA_API_KEY=...                        its API key, if it has one
+#   LOCALDUB_PORT=8080                       the port on this machine
+# Channels, runs, uploaded videos, settings.json and saved keys live in the volume "localdub-data".
+# To use videos from a folder here instead, add under volumes:  - ./videos:/data/videos
+services:
+  localdub:
+    image: ghcr.io/ivanwe2/localdub:latest
+    build: .
+    ports:
+      # this machine only: there is no login yet (reach it from elsewhere through an SSH tunnel)
+      - "127.0.0.1:${LOCALDUB_PORT:-8080}:8080"
+    environment:
+      LOCALDUB_LLM_URL: ${LOCALDUB_LLM_URL:-http://host.docker.internal:9876}
+      LLAMA_API_KEY: ${LLAMA_API_KEY:-}
+      # the names the browser uses to reach it (the server refuses others: DNS-rebinding guard)
+      LOCALDUB_ALLOWED_HOSTS: localhost:${LOCALDUB_PORT:-8080},127.0.0.1:${LOCALDUB_PORT:-8080}
+      NTFY_TOKEN: ${NTFY_TOKEN:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # a model server on this same machine
+    volumes:
+      - localdub-data:/data
+    restart: unless-stopped
+
+volumes:
+  localdub-data:
